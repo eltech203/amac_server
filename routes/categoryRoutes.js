@@ -3,7 +3,7 @@ const router = express.Router();
 const {createCategory,getCategories,bulkUploadCategories} = require("../controllers/categoryController");
 
 // Create new category
-router.post("/", createCategory);
+router.post("/add", createCategory);
 
 // Get all categories (cached)
 router.get("/getAll", getCategories);
