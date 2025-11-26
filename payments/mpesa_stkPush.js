@@ -118,7 +118,6 @@ router.post("/mpesa_stk_push", access, express.urlencoded({ extended: false }), 
         };
       }
 
-      console.log("📲 STK push response:", body);
      return res.status(200).json(body);
     }
   );
