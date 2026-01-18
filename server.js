@@ -15,7 +15,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // app.use('/api/products', require('./routes/products'));
 // app.use('/api/customers', require('./routes/customers'));
 // app.use('/api/orders', require('./routes/orders'));
-
+ app.use("/api/counties", require("./routes/counties.routes"));
 app.use("/api/nominee",  require("./routes/nomineeRoutes"));
 app.use("/api/categories", require("./routes/categoryRoutes"));
 app.use("/api/votes", require("./routes/voteRoutes"));
