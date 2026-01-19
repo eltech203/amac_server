@@ -1,9 +1,10 @@
 const express = require("express");
 const router = express.Router();
-const {createCategory,getCategories,createNominee,getNomineesByCategory,getNomineeList} = require("../controllers/nomineeController");
+const {createCategory,getCategories,createNominee,getNomineesByCategory,getNomineeList,checkNominees} = require("../controllers/nomineeController");
 
 // Categories
 router.get("/categories", getCategories);
+router.get("/check", checkNominees);
 
 // Nominees
 router.post("/addNominee", createNominee);

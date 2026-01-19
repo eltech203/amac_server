@@ -107,6 +107,72 @@ exports.createNominee = async (req, res) => {
   }
 };
 
+
+exports.checkNominees = async (req, res) => {
+  const { name, church, location } = req.query;
+
+  // ✅ Validate inputs
+  if (!name || !church || !location) {
+    return res.status(400).json({
+      error: "name, church and location are required"
+    });
+  }
+
+  // Normalize values (avoid case/space mismatch)
+  const cleanName = name.trim().toLowerCase();
+  const cleanChurch = church.trim().toLowerCase();
+  const cleanLocation = location.trim().toLowerCase();
+
+  const cacheKey = `nominee:${cleanName}:${cleanChurch}:${cleanLocation}`;
+
+  try {
+    // 🔑 Check Redis cache
+    const cached = await redisClient.get(cacheKey);
+    if (cached) {
+      return res.json(JSON.parse(cached));
+    }
+
+    // 🔍 Query database
+    const sql = `
+      SELECT *
+      FROM nominees
+      WHERE LOWER(name) = ?
+        AND LOWER(church) = ?
+        AND LOWER(location) = ?
+      LIMIT 1
+    `;
+
+    db.query(
+      sql,
+      [cleanName, cleanChurch, cleanLocation],
+      async (err, results) => {
+        if (err) {
+          console.error("❌ DB Error:", err.message);
+          return res.status(500).json({ error: "Database error" });
+        }
+
+        const exists = results.length > 0;
+        const response = {
+          exists,
+          nominee: exists ? results[0] : null
+        };
+
+        // ⏳ Cache for 5 minutes
+        await redisClient.setEx(cacheKey, 300, JSON.stringify(response));
+
+        return res.json(response);
+      }
+    );
+  } catch (error) {
+    console.error("❌ checkNominees Error:", error.message);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+
+
+
+
 // Get Nominees by Category (with Redis cache)
 exports.getNomineesByCategory = async (req, res) => {
   try {
