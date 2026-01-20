@@ -667,6 +667,38 @@ exports.getVotingActivity = async (req, res) => {
   }
 };
 
+
+// Nominees count grouped per category (for graph)
+exports.getNomineesPerCategory = async (req, res) => {
+  try {
+    const cacheKey = "nominees:per-category";
+    const cached = await redisClient.get(cacheKey);
+    if (cached) {
+      return res.json(JSON.parse(cached));
+    }
+
+    const [rows] = await db.promise().query(`
+      SELECT
+        c.id AS category_id,
+        c.name AS category_name,
+        COUNT(n.id) AS nominee_count
+      FROM categories c
+      LEFT JOIN nominees n ON n.category_id = c.id
+      GROUP BY c.id, c.name
+      ORDER BY nominee_count DESC, c.name ASC
+    `);
+
+    // cache for 60 seconds
+    await redisClient.setEx(cacheKey, 60, JSON.stringify(rows));
+
+    res.json(rows);
+  } catch (err) {
+    console.error("❌ Error fetching nominees per category:", err.message);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+
 exports.getTopNominees = async (req, res) => {
   try {
     const cacheKey = "votes:top_nominees";

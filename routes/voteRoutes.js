@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { getResults,getVotes,getVotesSummary,getNomineeResults,getVotesByCategoryId,getVotesSummaryByCategory,getLiveResults,getOverview,getAllvotes,
-    getDashboardTotals,getPaymentsSummary,getVotingActivity,getTopNominees,getVotesPerCategory } =  require("../controllers/voteControllers.js");
+    getDashboardTotals,getPaymentsSummary,getVotingActivity,getTopNominees,getVotesPerCategory,getNomineesPerCategory } =  require("../controllers/voteControllers.js");
 
 router.get("/results", getResults);
 router.get("/getVotes", getVotes);
@@ -16,6 +16,7 @@ router.get("/overview/:categoryId", getOverview);
 router.get("/dashboard-total", getDashboardTotals);
 router.get("/payment-summaery", getPaymentsSummary);
 router.get("/voting-activity", getVotingActivity);
+router.get("/categoty-activity", getNomineesPerCategory);
 router.get("/top-nominees", getTopNominees);
 router.get("/vote-category", getVotesPerCategory);
 
