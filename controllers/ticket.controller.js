@@ -37,10 +37,11 @@ exports.generateTicketsFromOrder = async (orderId) => {
 
 // Fetch tickets for user
 exports.getUserTickets = async (req, res) => {
+    const { uid } = req.params;
   try {
     const tickets = await executeQuery(
       "SELECT t.*, o.event_id FROM tickets t JOIN orders o ON t.order_id=o.id WHERE o.user_uid=?",
-      [req.body.uid]
+      [uid]
     );
     res.json(tickets);
   } catch (err) {
