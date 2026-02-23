@@ -10,8 +10,6 @@ const ticketCtrl = require('../controllers/ticket.controller');
 const scanCtrl = require('../controllers/scan.controller');
 const paymentCtrl = require('../controllers/payment.controller');
 
-// Auth middleware
-const auth = require('../middlewares/auth');
 
 // ===============================
 // ORGANIZER ROUTES
