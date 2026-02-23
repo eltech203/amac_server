@@ -14,15 +14,15 @@ const paymentCtrl = require('../controllers/payment.controller');
 // ===============================
 // ORGANIZER ROUTES
 // ===============================
-router.post('/organizers', organizerCtrl.createOrganizer); // Optional: admin only
-router.get('/organizers', organizerCtrl.getOrganizers);
+router.post('/organizers/create', organizerCtrl.createOrganizer); // Optional: admin only
+router.get('/organizers/get-all', organizerCtrl.getOrganizers);
 
 // ===============================
 // EVENT ROUTES
 // ===============================
-router.post('/events', eventCtrl.createEvent);
-router.get('/events', eventCtrl.getEvents); // public
-router.get('/events/:id', eventCtrl.getSingleEvent);
+router.post('/events/create-event', eventCtrl.createEvent);
+router.get('/events/get-event', eventCtrl.getEvents); // public
+router.get('/events/get-event/:id', eventCtrl.getSingleEvent);
 router.put('/events/:id/publish', eventCtrl.publishEvent);
 
 // // Organizer-specific events
@@ -34,18 +34,18 @@ router.put('/events/:id/publish', eventCtrl.publishEvent);
 // ===============================
 // TICKET CATEGORY ROUTES
 // ===============================
-router.post('/categories',  categoryCtrl.createCategory);
-router.get('/categories/:eventId', categoryCtrl.getCategoriesByEvent);
+router.post('/categories/create-category',  categoryCtrl.createCategory);
+router.get('/categories/get-by-event/:eventId', categoryCtrl.getCategoriesByEvent);
 
 // ===============================
 // ORDER ROUTES
 // ===============================
-router.post('/orders',  orderCtrl.createOrder);
+router.post('/orders/create-order',  orderCtrl.createOrder);
 
 // ===============================
 // TICKET ROUTES
 // ===============================
-router.get('/tickets', ticketCtrl.getUserTickets);
+router.get('/tickets/get-user-tickets', ticketCtrl.getUserTickets);
 
 // ===============================
 // SCAN / GATE ROUTES
