@@ -45,7 +45,7 @@ router.post('/orders/create-order',  orderCtrl.createOrder);
 // ===============================
 // TICKET ROUTES
 // ===============================
-router.get('/tickets/get-user-tickets', ticketCtrl.getUserTickets);
+router.get('/tickets/get-user-tickets/:uid', ticketCtrl.getUserTickets);
 
 // ===============================
 // SCAN / GATE ROUTES
