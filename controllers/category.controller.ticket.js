@@ -2,13 +2,23 @@ const db = require("../config/db");
 const { v4: uuidv4 } = require("uuid");
 const redis = require("../config/redis");
 
+// Helper to wrap pool.execute in a promise
+const executeQuery = (query, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.execute(query, params, (err, results) => {
+      if (err) return reject(err);
+      resolve(results); // results = rows
+    });
+  });
+};
+
 // Create Category for Event
 exports.createCategory = async (req, res) => {
   try {
     const { event_id, name, price, capacity } = req.body;
     const id = uuidv4();
 
-    await db.execute(
+    await executeQuery(
       "INSERT INTO ticket_categories (id, event_id, name, price, capacity) VALUES (?, ?, ?, ?, ?)",
       [id, event_id, name, price, capacity]
     );
@@ -30,7 +40,7 @@ exports.getCategoriesByEvent = async (req, res) => {
     const cached = await redis.get(cacheKey);
     if (cached) return res.json(JSON.parse(cached));
 
-    const [rows] = await db.execute(
+    const rows = await executeQuery(
       "SELECT * FROM ticket_categories WHERE event_id=?",
       [eventId]
     );
