@@ -2,6 +2,8 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const redisClient = require('./config/redis');
+const routes = require('./routes/tickets');
+
 const app = express();
 require('dotenv').config();
 
@@ -9,6 +11,9 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+
+// Use routes
+app.use('/api', routes);
 
 // Routes
 // app.use('/api/vendors', require('./routes/vendors'));
