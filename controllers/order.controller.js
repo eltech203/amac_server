@@ -18,8 +18,7 @@ const executeQuery = (conn, query, params = []) => {
 exports.createOrder = async (req, res) => {
   let conn;
   try {
-    const { event_id, items, phone } = req.body; // items = [{ category_id, quantity }]
-    const user_uid = req.user.uid;
+    const { event_id, items, phone, user_uid } = req.body; // items = [{ category_id, quantity }]
 
     // Prevent spam orders per phone
     const lockKey = `order_lock:${phone}`;
