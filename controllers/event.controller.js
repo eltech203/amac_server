@@ -1,6 +1,16 @@
-const db = require("../config/db");
+const db = require("../config/db"); // keep your current db.js
 const redis = require("../config/redis");
 const { v4: uuidv4 } = require("uuid");
+
+// Helper to wrap pool.execute in a promise
+const executeQuery = (query, params = []) => {
+  return new Promise((resolve, reject) => {
+    db.execute(query, params, (err, results) => {
+      if (err) return reject(err);
+      resolve(results); // results = rows
+    });
+  });
+};
 
 // Create Event (Organizer)
 exports.createEvent = async (req, res) => {
@@ -9,7 +19,7 @@ exports.createEvent = async (req, res) => {
     const organizer_id = req.user.uid;
     const id = uuidv4();
 
-    await db.execute(
+    await executeQuery(
       "INSERT INTO events (id, organizer_id, title, description, venue, event_date, status) VALUES (?, ?, ?, ?, ?, ?, 'draft')",
       [id, organizer_id, title, description, venue, event_date]
     );
@@ -26,11 +36,11 @@ exports.getEvents = async (req, res) => {
     const cached = await redis.get("events:active");
     if (cached) return res.json(JSON.parse(cached));
 
-    const [rows] = await db.execute(
+    const rows = await executeQuery(
       "SELECT * FROM events WHERE status='published' ORDER BY event_date DESC"
     );
 
-    await redis.set("events:active", JSON.stringify(rows), "EX", 300); // 5min cache
+    await redis.set("events:active", JSON.stringify(rows), "EX", 300); // 5 min cache
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -39,10 +49,10 @@ exports.getEvents = async (req, res) => {
 
 // Get single event
 exports.getSingleEvent = async (req, res) => {
-  const { id } = req.params;
   try {
-    const [rows] = await db.execute("SELECT * FROM events WHERE id=?", [id]);
-    res.json(rows[0]);
+    const { id } = req.params;
+    const rows = await executeQuery("SELECT * FROM events WHERE id=?", [id]);
+    res.json(rows[0] || null);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -52,7 +62,7 @@ exports.getSingleEvent = async (req, res) => {
 exports.publishEvent = async (req, res) => {
   try {
     const { id } = req.params;
-    await db.execute("UPDATE events SET status='published' WHERE id=?", [id]);
+    await executeQuery("UPDATE events SET status='published' WHERE id=?", [id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
