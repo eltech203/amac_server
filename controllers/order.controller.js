@@ -24,7 +24,7 @@ exports.createOrder = async (req, res) => {
     const lockKey = `order_lock:${phone}`;
     const exists = await redis.get(lockKey);
     if (exists)
-      return res.status(429).json({ message: "Please wait before retrying" });
+      return res.status(201).json({ message: "Please wait before retrying" });
     await redis.set(lockKey, "locked", "EX", 60);
 
     // Get connection
