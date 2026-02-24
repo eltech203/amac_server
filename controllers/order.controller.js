@@ -40,16 +40,16 @@ exports.createOrder = async (req, res) => {
     const orderId = uuidv4();
     let totalAmount = 0;
 
+    // 1️⃣ First, calculate totalAmount and update ticket sold_count
     for (const item of items) {
       const catRows = await executeQuery(
         conn,
         "SELECT price, capacity, sold_count FROM ticket_categories WHERE id=? FOR UPDATE",
         [item.category_id]
       );
-
       if (!catRows.length) throw new Error("Category not found");
-      const category = catRows[0];
 
+      const category = catRows[0];
       if (category.sold_count + item.quantity > category.capacity)
         throw new Error(`Category ${item.category_id} sold out`);
 
@@ -60,21 +60,29 @@ exports.createOrder = async (req, res) => {
         "UPDATE ticket_categories SET sold_count=sold_count+? WHERE id=?",
         [item.quantity, item.category_id]
       );
-
-      // Insert order_items per category
-      await executeQuery(
-        conn,
-        "INSERT INTO order_items (id, order_id, category_id, quantity, price) VALUES (?, ?, ?, ?, ?)",
-        [uuidv4(), orderId, item.category_id, item.quantity, category.price]
-      );
     }
 
-    // Insert order
+    // 2️⃣ Insert the order **before** order_items
     await executeQuery(
       conn,
       "INSERT INTO orders (id, event_id, user_uid, total_amount, phone, status) VALUES (?, ?, ?, ?, ?, 'pending')",
       [orderId, event_id, user_uid, totalAmount, phone]
     );
+
+    // 3️⃣ Insert all order_items
+    for (const item of items) {
+      const catRows = await executeQuery(
+        conn,
+        "SELECT price FROM ticket_categories WHERE id=?",
+        [item.category_id]
+      );
+      const price = catRows[0].price;
+      await executeQuery(
+        conn,
+        "INSERT INTO order_items (id, order_id, category_id, quantity, price) VALUES (?, ?, ?, ?, ?)",
+        [uuidv4(), orderId, item.category_id, item.quantity, price]
+      );
+    }
 
     await executeQuery(conn, "COMMIT");
     conn.release();
