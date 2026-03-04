@@ -14,39 +14,48 @@ exports.createOrder = async (req, res) => {
     });
   });
 
-  const { event_id, user_uid, phone, items } = req.body;
+  let { event_id, user_uid, phone, items } = req.body;
 
-  if (!items || !items.length) {
+  // Validate input
+  if (!items || !items.length)
     return res.status(400).json({ error: "No seats selected" });
-  }
 
   const orderId = uuidv4();
 
   try {
+    // Begin transaction
     await new Promise((resolve, reject) =>
       conn.beginTransaction(err => (err ? reject(err) : resolve()))
     );
 
     // 1️⃣ Lock & verify seats
     for (let seat of items) {
+      if (!seat.seat_id || seat.seat_id.trim().length !== 36) {
+        throw new Error(`Invalid seat id: "${seat.seat_id}"`);
+      }
+
+      const seatId = seat.seat_id.trim();
+      console.log("Checking seat:", seatId);
+
       const [rows] = await new Promise((resolve, reject) =>
         conn.query(
-          "SELECT status, price FROM seats WHERE id=? FOR UPDATE",
-          [seat.seat_id],
+          "SELECT status, price FROM seats WHERE TRIM(id)=? FOR UPDATE",
+          [seatId],
           (err, results) => (err ? reject(err) : resolve(results))
         )
       );
 
-      if (!rows.length) throw new Error(`Seat ${seat.seat_id} not found`);
-      if (rows[0].status !== "available") throw new Error(`Seat ${seat.seat_id} is not available`);
+      if (!rows.length) throw new Error(`Seat ${seatId} not found`);
+      if (rows[0].status !== "available")
+        throw new Error(`Seat ${seatId} is not available`);
 
       seat.price = rows[0].price;
 
       // Temporarily reserve seat
       await new Promise((resolve, reject) =>
         conn.query(
-          "UPDATE seats SET status='reserved' WHERE id=?",
-          [seat.seat_id],
+          "UPDATE seats SET status='reserved' WHERE TRIM(id)=?",
+          [seatId],
           err => (err ? reject(err) : resolve())
         )
       );
@@ -70,17 +79,19 @@ exports.createOrder = async (req, res) => {
       await new Promise((resolve, reject) =>
         conn.query(
           "INSERT INTO order_items (id, order_id, seat_id, price) VALUES (?,?,?,?)",
-          [orderItemId, orderId, seat.seat_id, seat.price],
+          [orderItemId, orderId, seat.seat_id.trim(), seat.price],
           err => (err ? reject(err) : resolve())
         )
       );
     }
 
-    // 5️⃣ Commit transaction
-    await new Promise((resolve, reject) => conn.commit(err => (err ? reject(err) : resolve())));
+    // Commit transaction
+    await new Promise((resolve, reject) =>
+      conn.commit(err => (err ? reject(err) : resolve()))
+    );
     conn.release();
 
-    // 6️⃣ Trigger M-Pesa STK push
+    // 5️⃣ Trigger M-Pesa STK push
     const stkResponse = await mpesaService.stkPush({
       phone,
       amount: totalAmount,
@@ -91,6 +102,7 @@ exports.createOrder = async (req, res) => {
   } catch (err) {
     await new Promise(resolve => conn.rollback(() => resolve()));
     conn.release();
+    console.error("Order creation failed:", err.message);
     res.status(400).json({ error: err.message });
   }
 };
