@@ -15,7 +15,7 @@ exports.createOrder = async (req, res) => {
   });
 
   const { event_id, user_uid, phone, items } = req.body;
-  // items = [{ seat_id }]
+   items = [{ seat_id }]
 
   if (!items || !items.length) return res.status(400).json({ error: "No seats selected" });
 
