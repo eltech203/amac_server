@@ -39,8 +39,8 @@ router.get('/seats/event/:event_id', seatCtrl.getSeatsByEvent); // List seats fo
 // ===============================
 // ORDER ROUTES
 // ===============================
-router.post('/orders', orderCtrl.createOrder);      // Create order (select seats)
-router.get('/orders', orderCtrl.getOrders);         // List all orders
+router.post('/orders/create', orderCtrl.createOrder);      // Create order (select seats)
+router.get('/orders/get-orders', orderCtrl.getOrders);         // List all orders
 // router.get('/orders/:id', orderCtrl.getSingleOrder);// Single order
 
 
