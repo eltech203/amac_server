@@ -29,6 +29,7 @@ app.use("/transaction", require("./routes/paymentRoutes"));
 
 
 
+
 app.get('/', async (req, res) => {
   res.send({ message: 'Amac server' });
 });

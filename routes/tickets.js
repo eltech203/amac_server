@@ -4,7 +4,7 @@ const router = express.Router();
 // Import controllers
 const organizerCtrl = require('../controllers/organizer.controller');
 const eventCtrl = require('../controllers/event.controller');
-const categoryCtrl = require('../controllers/category.controller.ticket');
+const seatCtrl = require('../controllers/seat.controller');
 const orderCtrl = require('../controllers/order.controller');
 const ticketCtrl = require('../controllers/ticket.controller');
 const scanCtrl = require('../controllers/scan.controller');
@@ -14,48 +14,75 @@ const paymentCtrl = require('../controllers/payment.controller');
 // ===============================
 // ORGANIZER ROUTES
 // ===============================
-router.post('/organizers/create', organizerCtrl.createOrganizer); // Optional: admin only
-router.get('/organizers/get-all', organizerCtrl.getOrganizers);
+router.post('/organizers/create', organizerCtrl.createOrganizer);
+router.get('/organizers', organizerCtrl.getOrganizers);
+router.get('/organizers/:id', organizerCtrl.getSingleOrganizer);
+
 
 // ===============================
 // EVENT ROUTES
 // ===============================
-router.post('/events/create-event', eventCtrl.createEvent);
-router.get('/events/get-event', eventCtrl.getEvents); // public
-router.get('/events/get-event/:id', eventCtrl.getSingleEvent);
+router.post('/events', eventCtrl.createEvent);
+router.get('/events', eventCtrl.getEvents);
+router.get('/events/:id', eventCtrl.getSingleEvent);
 router.put('/events/:id/publish', eventCtrl.publishEvent);
 
-// // Organizer-specific events
-// router.get('/events/organizer', auth("organizer"), async (req, res) => {
-//   const events = await db.execute("SELECT * FROM events WHERE organizer_id=?", [req.user.uid]);
-//   res.json(events[0]);
-// });
 
 // ===============================
-// TICKET CATEGORY ROUTES
+// SEAT ROUTES (NEW)
 // ===============================
-router.post('/categories/create-category',  categoryCtrl.createCategory);
-router.get('/categories/get-by-event/:eventId', categoryCtrl.getCategoriesByEvent);
+// Create seats (admin)
+router.post('/seats/create', seatCtrl.createSeat);
+
+// Get seats by event
+router.get('/seats/event/:event_id', seatCtrl.getSeatsByEvent);
+
+// Update seat status (optional admin tool)
+router.put('/seats/:id/status', seatCtrl.updateSeatStatus);
+
 
 // ===============================
 // ORDER ROUTES
 // ===============================
-router.post('/orders/create-order',  orderCtrl.createOrder);
+// Create order (select seats)
+router.post('/orders', orderCtrl.createOrder);
+
+// Get all orders
+router.get('/orders', orderCtrl.getOrders);
+
+// Get single order
+router.get('/orders/:id', orderCtrl.getSingleOrder);
+
 
 // ===============================
 // TICKET ROUTES
 // ===============================
-router.get('/tickets/get-user-tickets/:uid', ticketCtrl.getUserTickets);
+// Get tickets for a user
+router.get('/tickets/user/:uid', ticketCtrl.getUserTickets);
+
+// Get tickets for an order
+router.get('/tickets/order/:order_id', ticketCtrl.getOrderTickets);
+
+
+// // ===============================
+// // RECEIPT ROUTES (NEW)
+// // ===============================
+// router.get('/receipts/:payment_id', receiptCtrl.getReceiptByPayment);
+// router.get('/receipts/order/:order_id', receiptCtrl.getReceiptByOrder);
+
 
 // ===============================
 // SCAN / GATE ROUTES
 // ===============================
 router.post('/scan/validate', scanCtrl.validateTicket);
 
+
 // ===============================
 // PAYMENT ROUTES
 // ===============================
-router.post('/payments/mpesa/stk-push', paymentCtrl.initiateSTK);
-router.post('/payments/mpesa/callback', paymentCtrl.mpesaCallback); // no auth, called by M-Pesa
+router.post('/payment/stk-push', paymentCtrl.accessToken, paymentCtrl.stkPush);
+
+// ⚠️ NO AUTH — called by M-Pesa
+router.post('/payment/callback', paymentCtrl.callback);
 
 module.exports = router;
