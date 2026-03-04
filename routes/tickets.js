@@ -8,7 +8,7 @@ const seatCtrl = require('../controllers/seat.controller');
 const orderCtrl = require('../controllers/order.controller');
 const ticketCtrl = require('../controllers/ticket.controller');
 const scanCtrl = require('../controllers/scan.controller');
-const paymentCtrl = require('../controllers/payment.controller');
+const paymentCtrl = require('../payments/mpesa_stkPush_tickets');
 
 
 // ===============================
