@@ -8,7 +8,7 @@ const seatCtrl = require('../controllers/seat.controller');
 const orderCtrl = require('../controllers/order.controller');
 const ticketCtrl = require('../controllers/ticket.controller');
 const scanCtrl = require('../controllers/scan.controller');
-const paymentCtrl = require('../payments/mpesa_stkPush_tickets');
+const paymentCtrl = require('../services/mpesa.service');
 
 
 // ===============================
@@ -41,7 +41,7 @@ router.get('/seats/event/:event_id', seatCtrl.getSeatsByEvent); // List seats fo
 // ===============================
 router.post('/orders/create', orderCtrl.createOrder);      // Create order (select seats)
 router.get('/orders/get-orders', orderCtrl.getOrders);         // List all orders
-// router.get('/orders/:id', orderCtrl.getSingleOrder);// Single order
+router.get('/orders/:id', orderCtrl.getSingleOrder);// Single order
 
 
 // ===============================
@@ -68,7 +68,7 @@ router.post('/scan/validate', scanCtrl.validateTicket);
 // ===============================
 // PAYMENT ROUTES
 // ===============================
-router.post('/payment/stk-push', paymentCtrl.accessToken, paymentCtrl.stkPush);
+// router.post('/payment/stk-push', paymentCtrl.accessToken, paymentCtrl.stkPush);
 router.post('/payment/callback', paymentCtrl.callback); // No auth, called by M-Pesa
 //router.post('/payment/query', paymentCtrl.accessToken, paymentCtrl.querySTK); // Optional query
 
