@@ -41,7 +41,7 @@ router.get('/seats/event/:event_id', seatCtrl.getSeatsByEvent); // List seats fo
 // ===============================
 router.post('/orders', orderCtrl.createOrder);      // Create order (select seats)
 router.get('/orders', orderCtrl.getOrders);         // List all orders
-router.get('/orders/:id', orderCtrl.getSingleOrder);// Single order
+// router.get('/orders/:id', orderCtrl.getSingleOrder);// Single order
 
 
 // ===============================
@@ -68,8 +68,8 @@ router.post('/scan/validate', scanCtrl.validateTicket);
 // ===============================
 // PAYMENT ROUTES
 // ===============================
-router.post('/payment/stk-push', paymentCtrl.accessToken, paymentCtrl.initiateSTK);
-router.post('/payment/callback', paymentCtrl.mpesaCallback); // No auth, called by M-Pesa
+router.post('/payment/stk-push', paymentCtrl.accessToken, paymentCtrl.stkPush);
+router.post('/payment/callback', paymentCtrl.callback); // No auth, called by M-Pesa
 //router.post('/payment/query', paymentCtrl.accessToken, paymentCtrl.querySTK); // Optional query
 
 
