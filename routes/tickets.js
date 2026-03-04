@@ -16,7 +16,6 @@ const paymentCtrl = require('../controllers/payment.controller');
 // ===============================
 router.post('/organizers/create', organizerCtrl.createOrganizer);
 router.get('/organizers', organizerCtrl.getOrganizers);
-router.get('/organizers/:id', organizerCtrl.getSingleOrganizer);
 
 
 // ===============================
