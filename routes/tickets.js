@@ -14,8 +14,9 @@ const paymentCtrl = require('../controllers/payment.controller');
 // ===============================
 // ORGANIZER ROUTES
 // ===============================
-router.post('/organizers/create', organizerCtrl.createOrganizer);
+router.post('/organizers', organizerCtrl.createOrganizer);
 router.get('/organizers', organizerCtrl.getOrganizers);
+// router.get('/organizers/:id', organizerCtrl.getSingleOrganizer);
 
 
 // ===============================
@@ -28,44 +29,32 @@ router.put('/events/:id/publish', eventCtrl.publishEvent);
 
 
 // ===============================
-// SEAT ROUTES (NEW)
+// SEAT ROUTES
 // ===============================
-// Create seats (admin)
-router.post('/seats/create', seatCtrl.createSeat);
-
-// Get seats by event
-router.get('/seats/event/:event_id', seatCtrl.getSeatsByEvent);
-
-// Update seat status (optional admin tool)
-router.put('/seats/:id/status', seatCtrl.updateSeatStatus);
+router.post('/seats', seatCtrl.createSeat);               // Create seat
+router.get('/seats/event/:event_id', seatCtrl.getSeatsByEvent); // List seats for event
+// router.put('/seats/:id/status', seatCtrl.updateSeatStatus);      // Update seat status
 
 
 // ===============================
 // ORDER ROUTES
 // ===============================
-// Create order (select seats)
-router.post('/orders', orderCtrl.createOrder);
-
-// Get all orders
-router.get('/orders', orderCtrl.getOrders);
-
-// Get single order
-router.get('/orders/:id', orderCtrl.getSingleOrder);
+router.post('/orders', orderCtrl.createOrder);      // Create order (select seats)
+router.get('/orders', orderCtrl.getOrders);         // List all orders
+router.get('/orders/:id', orderCtrl.getSingleOrder);// Single order
 
 
 // ===============================
 // TICKET ROUTES
 // ===============================
-// Get tickets for a user
 router.get('/tickets/user/:uid', ticketCtrl.getUserTickets);
-
-// Get tickets for an order
 router.get('/tickets/order/:order_id', ticketCtrl.getOrderTickets);
+router.get('/tickets/:id', ticketCtrl.getSingleTicket); // Single ticket for QR display
 
 
-// // ===============================
-// // RECEIPT ROUTES (NEW)
-// // ===============================
+// ===============================
+// RECEIPT ROUTES
+// ===============================
 // router.get('/receipts/:payment_id', receiptCtrl.getReceiptByPayment);
 // router.get('/receipts/order/:order_id', receiptCtrl.getReceiptByOrder);
 
@@ -79,9 +68,9 @@ router.post('/scan/validate', scanCtrl.validateTicket);
 // ===============================
 // PAYMENT ROUTES
 // ===============================
-router.post('/payment/stk-push', paymentCtrl.accessToken, paymentCtrl.stkPush);
+router.post('/payment/stk-push', paymentCtrl.accessToken, paymentCtrl.initiateSTK);
+router.post('/payment/callback', paymentCtrl.mpesaCallback); // No auth, called by M-Pesa
+//router.post('/payment/query', paymentCtrl.accessToken, paymentCtrl.querySTK); // Optional query
 
-// ⚠️ NO AUTH — called by M-Pesa
-router.post('/payment/callback', paymentCtrl.callback);
 
 module.exports = router;

@@ -1,50 +1,166 @@
-const db = require("../config/db");
-const redis = require("../config/redis");
-const QRCode = require("qrcode");
-const { v4: uuidv4 } = require("uuid");
+const db = require('../config/db');
+const crypto = require('crypto');
 
-// Helper to wrap db.execute in a promise
-const executeQuery = (query, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.execute(query, params, (err, results) => {
-      if (err) return reject(err);
-      resolve(results); // results = rows
-    });
-  });
-};
 
-// Generate tickets after payment
-exports.generateTicketsFromOrder = async (orderId) => {
-  const items = await executeQuery("SELECT * FROM order_items WHERE order_id=?", [orderId]);
-  const orders = await executeQuery("SELECT * FROM orders WHERE id=?", [orderId]);
-  const order = orders[0];
+// =======================================
+// GENERATE TICKETS AFTER PAYMENT SUCCESS
+// =======================================
+exports.generateTickets = async (order_id) => {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
 
-  for (const item of items) {
-    for (let i = 0; i < item.quantity; i++) {
-      const ticketId = uuidv4();
-      const qrToken = ticketId; // you can also generate JWT if needed
+    // 1️⃣ Get order
+    const [orders] = await connection.execute(
+      "SELECT * FROM orders WHERE id=?",
+      [order_id]
+    );
 
-      await executeQuery(
-        "INSERT INTO tickets (id, order_id, category_id, qr_token, status) VALUES (?, ?, ?, ?, 'valid')",
-        [ticketId, orderId, item.category_id, qrToken]
+    if (orders.length === 0) {
+      throw new Error("Order not found");
+    }
+
+    const order = orders[0];
+
+    // 2️⃣ Get seats from order_items
+    const [items] = await connection.execute(
+      "SELECT * FROM order_items WHERE order_id=?",
+      [order_id]
+    );
+
+    if (items.length === 0) {
+      throw new Error("No seats found for order");
+    }
+
+    // 3️⃣ Generate ticket per seat
+    for (const item of items) {
+      const qr = crypto.randomBytes(20).toString('hex');
+
+      await connection.execute(
+        `INSERT INTO tickets 
+        (order_id, seat_id, user_id, event_id, qr_code) 
+        VALUES (?,?,?,?,?)`,
+        [
+          order_id,
+          item.seat_id,
+          order.user_id,
+          order.event_id,
+          qr
+        ]
       );
 
-      // Cache ticket in Redis for 7 days
-      await redis.set(`ticket:${ticketId}`, JSON.stringify({ status: "valid" }), "EX", 7 * 24 * 3600);
+      // 4️⃣ Mark seat as sold
+      await connection.execute(
+        "UPDATE seats SET status='sold' WHERE id=?",
+        [item.seat_id]
+      );
     }
+
+    await connection.commit();
+    return true;
+
+  } catch (error) {
+    await connection.rollback();
+    console.error(error);
+    return false;
+  } finally {
+    connection.release();
   }
 };
 
-// Fetch tickets for user
+
+// =======================================
+// GET USER TICKETS
+// =======================================
 exports.getUserTickets = async (req, res) => {
-    const { uid } = req.params;
   try {
-    const tickets = await executeQuery(
-      "SELECT t.*, o.event_id FROM tickets t JOIN orders o ON t.order_id=o.id WHERE o.user_uid=?",
-      [uid]
-    );
-    res.json(tickets);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+    const { uid } = req.params;
+
+    const [tickets] = await db.execute(`
+      SELECT 
+        t.id,
+        t.qr_code,
+        t.status,
+        e.title AS event_name,
+        s.row_number,
+        s.seat_number
+      FROM tickets t
+      JOIN events e ON t.event_id = e.id
+      JOIN seats s ON t.seat_id = s.id
+      WHERE t.user_id = ?
+      ORDER BY t.created_at DESC
+    `, [uid]);
+
+    res.json({
+      success: true,
+      tickets
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+
+// =======================================
+// GET TICKETS BY ORDER
+// =======================================
+exports.getOrderTickets = async (req, res) => {
+  try {
+    const { order_id } = req.params;
+
+    const [tickets] = await db.execute(`
+      SELECT 
+        t.id,
+        t.qr_code,
+        t.status,
+        s.row_number,
+        s.seat_number
+      FROM tickets t
+      JOIN seats s ON t.seat_id = s.id
+      WHERE t.order_id = ?
+    `, [order_id]);
+
+    res.json({
+      success: true,
+      tickets
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+
+// =======================================
+// GET SINGLE TICKET (FOR QR DISPLAY)
+// =======================================
+exports.getSingleTicket = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [ticket] = await db.execute(`
+      SELECT 
+        t.*,
+        e.title AS event_name,
+        s.row_number,
+        s.seat_number
+      FROM tickets t
+      JOIN events e ON t.event_id = e.id
+      JOIN seats s ON t.seat_id = s.id
+      WHERE t.id = ?
+    `, [id]);
+
+    if (ticket.length === 0) {
+      return res.status(404).json({ error: "Ticket not found" });
+    }
+
+    res.json({
+      success: true,
+      ticket: ticket[0]
+    });
+
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 };
