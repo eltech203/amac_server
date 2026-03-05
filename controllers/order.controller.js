@@ -44,7 +44,9 @@ exports.createOrder = async (req, res) => {
     const stkResponse = await mpesaService.stkPush({
       phone,
       amount: totalAmount,
-      orderId
+      orderId,
+      event_id,
+      user_uid
     });
 
     res.json({ success: true, orderId, stkResponse });
