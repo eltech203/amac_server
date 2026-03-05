@@ -264,3 +264,55 @@ exports.getSingleTicket = (req, res) => {
   );
 
 };
+
+
+// ======================================================
+// SCAN TICKET / VALIDATE
+// ======================================================
+exports.scanTicket = async (req, res) => {
+  try {
+    const { qr_token } = req.body;
+
+    if (!qr_token) {
+      return res.status(400).json({ success: false, message: "QR token required" });
+    }
+
+    // Find ticket
+    const [tickets] = await db.execute(
+      "SELECT * FROM tickets WHERE qr_token = ?",
+      [qr_token]
+    );
+
+    if (!tickets.length) {
+      return res.status(404).json({ success: false, message: "Ticket not found" });
+    }
+
+    const ticket = tickets[0];
+
+    // Check status
+    if (ticket.status !== "valid") {
+      return res.json({ success: false, message: `Ticket is ${ticket.status}` });
+    }
+
+    // Mark ticket as used
+    await db.execute(
+      "UPDATE tickets SET status='used' WHERE id=?",
+      [ticket.id]
+    );
+
+    return res.json({
+      success: true,
+      message: "Ticket valid and marked as used",
+      ticket: {
+        id: ticket.id,
+        order_id: ticket.order_id,
+        seat_id: ticket.seat_id,
+        status: "used"
+      }
+    });
+
+  } catch (err) {
+    console.error("Ticket scan error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
