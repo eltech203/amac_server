@@ -152,7 +152,7 @@ exports.generateTickets = (req, res) => {
 
 };
 
-exports.generateTickets_int = async  (order_id ,user_id,event_id) => {
+exports.generateTickets_int = async  (order_id ,user_uid,event_id) => {
 
   if (!order_id) {
     return {
@@ -210,7 +210,7 @@ exports.generateTickets_int = async  (order_id ,user_id,event_id) => {
               [
                 ticketId,
                 order_id,
-                user_id,
+                user_uid,
                 event_id,
                 item.seat_id,
                 qrToken,
