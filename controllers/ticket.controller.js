@@ -155,23 +155,23 @@ exports.generateTickets = (req, res) => {
 exports.generateTickets_int = async  (order_id ,user_id,event_id) => {
 
   if (!order_id) {
-    return res.status(400).json({
+    return {
       success: false,
       message: "order_id is required"
-    });
+    };
   }
 
   db.getConnection((err, connection) => {
 
     if (err) {
-      return res.status(500).json({ error: err.message });
+      return { error: err.message };
     }
 
     connection.beginTransaction((err) => {
 
       if (err) {
         connection.release();
-        return res.status(500).json({ error: err.message });
+        return { error: err.message };
       }
 
       // 1️⃣ get seats for order
@@ -183,17 +183,14 @@ exports.generateTickets_int = async  (order_id ,user_id,event_id) => {
           if (err) {
             return connection.rollback(() => {
               connection.release();
-              res.status(500).json({ error: err.message });
+              return { error: err.message };
             });
           }
 
           if (!items.length) {
             return connection.rollback(() => {
               connection.release();
-              res.status(400).json({
-                success: false,
-                message: "No seats found for this order"
-              });
+              return { error: "No seats found for this order" };
             });
           }
 
@@ -225,7 +222,7 @@ exports.generateTickets_int = async  (order_id ,user_id,event_id) => {
                 if (err) {
                   return connection.rollback(() => {
                     connection.release();
-                    res.status(500).json({ error: err.message });
+                    return { error: err.message };
                   });
                 }
 
@@ -238,7 +235,7 @@ exports.generateTickets_int = async  (order_id ,user_id,event_id) => {
                     if (err) {
                       return connection.rollback(() => {
                         connection.release();
-                        res.status(500).json({ error: err.message });
+                        return { error: err.message };
                       });
                     }
 
@@ -259,18 +256,18 @@ exports.generateTickets_int = async  (order_id ,user_id,event_id) => {
                         if (err) {
                           return connection.rollback(() => {
                             connection.release();
-                            res.status(500).json({ error: err.message });
+                            return { error: err.message };
                           });
                         }
 
                         connection.release();
 
-                        return res.json({
+                        return {
                           success: true,
                           message: "Tickets generated successfully",
                           order_id,
                           tickets
-                        });
+                        };
 
                       });
 
