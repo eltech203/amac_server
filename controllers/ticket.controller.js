@@ -6,8 +6,12 @@ const { v4: uuidv4 } = require("uuid");
 // ======================================================
 // GENERATE TICKETS AFTER PAYMENT SUCCESS
 // ======================================================
+// ======================================================
+// GENERATE TICKETS AFTER PAYMENT SUCCESS
+// ======================================================
 exports.generateTickets = async (req, res) => {
- const { order_id } = req.body;
+
+  const { order_id } = req.body;
 
   if (!order_id) {
     return res.status(400).json({
@@ -89,10 +93,7 @@ exports.generateTickets = async (req, res) => {
       error: err.message
     });
   }
-
 };
-
-
 
 // ======================================================
 // GET USER TICKETS
