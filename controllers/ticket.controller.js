@@ -269,50 +269,81 @@ exports.getSingleTicket = (req, res) => {
 // ======================================================
 // SCAN TICKET / VALIDATE
 // ======================================================
-exports.scanTicket = async (req, res) => {
-  try {
-    const { qr_token } = req.body;
 
-    if (!qr_token) {
-      return res.status(400).json({ success: false, message: "QR token required" });
-    }
+exports.scanTicket = (req, res) => {
 
-    // Find ticket
-    const [tickets] = await db.execute(
-      "SELECT * FROM tickets WHERE qr_token = ?",
-      [qr_token]
-    );
+  const { qr_token } = req.body;
 
-    if (!tickets.length) {
-      return res.status(404).json({ success: false, message: "Ticket not found" });
-    }
-
-    const ticket = tickets[0];
-
-    // Check status
-    if (ticket.status !== "valid") {
-      return res.json({ success: false, message: `Ticket is ${ticket.status}` });
-    }
-
-    // Mark ticket as used
-    await db.execute(
-      "UPDATE tickets SET status='used' WHERE id=?",
-      [ticket.id]
-    );
-
-    return res.json({
-      success: true,
-      message: "Ticket valid and marked as used",
-      ticket: {
-        id: ticket.id,
-        order_id: ticket.order_id,
-        seat_id: ticket.seat_id,
-        status: "used"
-      }
+  if (!qr_token) {
+    return res.status(400).json({
+      success:false,
+      message:"QR token is required"
     });
-
-  } catch (err) {
-    console.error("Ticket scan error:", err);
-    return res.status(500).json({ success: false, message: err.message });
   }
+
+  // 1️⃣ Find ticket
+  db.query(
+    `
+    SELECT 
+      t.id,
+      t.status,
+      t.order_id,
+      s.row_no,
+      s.seat_no
+    FROM tickets t
+    JOIN seats s ON t.seat_id = s.id
+    WHERE t.qr_token = ?
+    `,
+    [qr_token],
+    (err, results) => {
+
+      if (err) {
+        console.error("Ticket scan error:", err);
+        return res.status(500).json({ success:false, message:"Database error" });
+      }
+
+      if (!results.length) {
+        return res.json({
+          success:false,
+          message:"Invalid ticket"
+        });
+      }
+
+      const ticket = results[0];
+
+      // 2️⃣ Check if already used
+      if (ticket.status === "used") {
+        return res.json({
+          success:false,
+          message:"Ticket already used",
+          ticket
+        });
+      }
+
+      // 3️⃣ Mark ticket as used
+      db.query(
+        "UPDATE tickets SET status='used' WHERE id=?",
+        [ticket.id],
+        (updateErr) => {
+
+          if (updateErr) {
+            console.error(updateErr);
+            return res.status(500).json({
+              success:false,
+              message:"Failed to update ticket"
+            });
+          }
+
+          return res.json({
+            success:true,
+            message:"Ticket valid — entry allowed",
+            ticket
+          });
+
+        }
+      );
+
+    }
+  );
+
 };
