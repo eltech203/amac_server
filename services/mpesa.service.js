@@ -36,7 +36,7 @@ const paymentMetaStore = {}; // Temporary in-memory store (use Redis in producti
 // -----------------
 // Trigger STK Push
 // -----------------
-exports.stkPush = async ( phone, amount, order_id, event_id, user_uid) => {
+exports.stkPush = async ( {phone, amount, order_id, event_id, user_uid}) => {
   const token = await getAccessToken();
 
   // Store metadata for callback reference
