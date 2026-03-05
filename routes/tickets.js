@@ -47,6 +47,7 @@ router.get('/orders/:id', orderCtrl.getSingleOrder);// Single order
 // ===============================
 // TICKET ROUTES
 // ===============================
+router.post('/tickets/generate', ticketCtrl.generateTickets); // Generate tickets after payment
 router.get('/tickets/user/:uid', ticketCtrl.getUserTickets);
 router.get('/tickets/order/:order_id', ticketCtrl.getOrderTickets);
 router.get('/tickets/:id', ticketCtrl.getSingleTicket); // Single ticket for QR display

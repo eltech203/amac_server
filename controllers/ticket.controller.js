@@ -5,8 +5,8 @@ const crypto = require("crypto");
 // ======================================================
 // GENERATE TICKETS AFTER PAYMENT SUCCESS
 // ======================================================
-exports.generateTickets = async (order_id) => {
-
+exports.generateTickets = async (req, res) => {
+ const { order_id } = req.body;
   const connection = await new Promise((resolve, reject) => {
     db.getConnection((err, conn) => {
       if (err) return reject(err);
