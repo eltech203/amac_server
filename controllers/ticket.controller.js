@@ -1,5 +1,6 @@
 const db = require("../config/db");
 const crypto = require("crypto");
+const { v4: uuidv4 } = require("uuid");
 
 
 // ======================================================
@@ -7,98 +8,86 @@ const crypto = require("crypto");
 // ======================================================
 exports.generateTickets = async (req, res) => {
  const { order_id } = req.body;
-  const connection = await new Promise((resolve, reject) => {
-    db.getConnection((err, conn) => {
-      if (err) return reject(err);
-      resolve(conn);
+
+  if (!order_id) {
+    return res.status(400).json({
+      success: false,
+      message: "order_id is required"
     });
-  });
+  }
+
+  const connection = await db.getConnection();
 
   try {
 
-    await new Promise((resolve, reject) =>
-      connection.beginTransaction(err => err ? reject(err) : resolve())
+    await connection.beginTransaction();
+
+    // 1️⃣ Get seats for the order
+    const [items] = await connection.execute(
+      "SELECT seat_id FROM order_items WHERE order_id = ?",
+      [order_id]
     );
 
-    // 1️⃣ Get order
-    const orders = await new Promise((resolve, reject) =>
-      connection.query(
-        "SELECT * FROM orders WHERE id=?",
-        [order_id],
-        (err, rows) => err ? reject(err) : resolve(rows)
-      )
-    );
-
-    if (!orders.length) throw new Error("Order not found");
-
-    const order = orders[0];
-
-
-    // 2️⃣ Get seats for this order
-    const items = await new Promise((resolve, reject) =>
-      connection.query(
-        "SELECT * FROM order_items WHERE order_id=?",
-        [order_id],
-        (err, rows) => err ? reject(err) : resolve(rows)
-      )
-    );
-
-    if (!items.length) throw new Error("No seats found for this order");
-
-
-    // 3️⃣ Generate ticket for each seat
-    for (const item of items) {
-
-      const qr_code = crypto.randomBytes(20).toString("hex");
-
-      await new Promise((resolve, reject) =>
-        connection.query(
-          `INSERT INTO tickets
-          (order_id, seat_id, user_id, event_id, qr_code, status)
-          VALUES (?,?,?,?,?,'valid')`,
-          [
-            order_id,
-            item.seat_id,
-            order.user_uid,
-            order.event_id,
-            qr_code
-          ],
-          err => err ? reject(err) : resolve()
-        )
-      );
-
-
-      // 4️⃣ Mark seat sold
-      await new Promise((resolve, reject) =>
-        connection.query(
-          "UPDATE seats SET status='sold' WHERE id=?",
-          [item.seat_id],
-          err => err ? reject(err) : resolve()
-        )
-      );
-
+    if (!items.length) {
+      throw new Error("No seats found for this order");
     }
 
-    await new Promise((resolve, reject) =>
-      connection.commit(err => err ? reject(err) : resolve())
-    );
+    const tickets = [];
 
-    console.log("🎟 Tickets generated for order:", order_id);
+    // 2️⃣ Generate ticket per seat
+    for (const item of items) {
 
-    return true;
+      const ticketId = uuidv4();
+      const qrToken = crypto.randomBytes(20).toString("hex");
 
-  } catch (error) {
+      await connection.execute(
+        `INSERT INTO tickets
+        (id, order_id, seat_id, qr_token, status)
+        VALUES (?,?,?,?,?)`,
+        [
+          ticketId,
+          order_id,
+          item.seat_id,
+          qrToken,
+          "valid"
+        ]
+      );
 
-    await new Promise(resolve => connection.rollback(() => resolve()));
+      // mark seat as sold
+      await connection.execute(
+        "UPDATE seats SET status='sold' WHERE id = ?",
+        [item.seat_id]
+      );
 
-    console.error("Ticket generation failed:", error);
+      tickets.push({
+        ticket_id: ticketId,
+        seat_id: item.seat_id,
+        qr_token: qrToken,
+        status: "valid"
+      });
+    }
 
-    return false;
-
-  } finally {
-
+    await connection.commit();
     connection.release();
 
+    return res.json({
+      success: true,
+      message: "Tickets generated successfully",
+      order_id,
+      tickets
+    });
+
+  } catch (err) {
+
+    await connection.rollback();
+    connection.release();
+
+    console.error("Ticket generation failed:", err);
+
+    return res.status(500).json({
+      success: false,
+      error: err.message
+    });
   }
 
 };
