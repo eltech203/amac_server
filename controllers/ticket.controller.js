@@ -11,7 +11,7 @@ const { v4: uuidv4 } = require("uuid");
 // ======================================================
 exports.generateTickets = (req, res) => {
 
-  const { order_id } = req.body;
+  const { order_id ,user_id,event_id} = req.body;
 
   if (!order_id) {
     return res.status(400).json({
@@ -67,11 +67,13 @@ exports.generateTickets = (req, res) => {
             // 2️⃣ insert ticket
             connection.query(
               `INSERT INTO tickets
-              (id, order_id, seat_id, qr_token,qr_code, status)
-              VALUES (?,?,?,?,?,?)`,
+              (id, order_id, user_id,event_id, seat_id, qr_token,qr_code, status)
+              VALUES (?,?,?,?,?,?,?,?)`,
               [
                 ticketId,
                 order_id,
+                user_id,
+                event_id,
                 item.seat_id,
                 qrToken,
                 qrToken,
