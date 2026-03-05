@@ -67,12 +67,13 @@ exports.generateTickets = (req, res) => {
             // 2️⃣ insert ticket
             connection.query(
               `INSERT INTO tickets
-              (id, order_id, seat_id, qr_token, status)
-              VALUES (?,?,?,?,?)`,
+              (id, order_id, seat_id, qr_token,qr_code, status)
+              VALUES (?,?,?,?,?,?)`,
               [
                 ticketId,
                 order_id,
                 item.seat_id,
+                qrToken,
                 qrToken,
                 "valid"
               ],
