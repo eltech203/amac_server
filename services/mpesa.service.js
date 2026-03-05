@@ -71,7 +71,7 @@ exports.stkPush = async ( {phone, amount, order_id, event_id, user_uid}) => {
       `pending_payment:${response.data.CheckoutRequestID}`,
       JSON.stringify({ order_id, event_id, user_uid }),
       "EX",
-      1800
+      200
     );
   }
 
