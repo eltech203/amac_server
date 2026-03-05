@@ -32,12 +32,14 @@ async function getAccessToken() {
   return accessToken;
 }
 
+const paymentMetaStore = {}; // Temporary in-memory store (use Redis in production)
 // -----------------
 // Trigger STK Push
 // -----------------
-exports.stkPush = async ({ phone, amount, orderId }) => {
+exports.stkPush = async ({ phone, amount, orderId, event_id, user_uid, }) => {
   const token = await getAccessToken();
 
+  // Store metadata for callback reference
   const timestamp = moment().format("YYYYMMDDHHmmss");
   const password = Buffer.from(
     mpesaConfig.shortCode + mpesaConfig.passKey + timestamp
@@ -67,7 +69,7 @@ exports.stkPush = async ({ phone, amount, orderId }) => {
   if (response.data.CheckoutRequestID) {
     await redis.set(
       `pending_payment:${response.data.CheckoutRequestID}`,
-      JSON.stringify({ orderId }),
+      JSON.stringify({ orderId, event_id, user_uid }),
       "EX",
       1800
     );
@@ -87,10 +89,11 @@ exports.callback = async (req, res) => {
     if (!callback || callback.ResultCode !== 0) return;
 
     const metaKey = `pending_payment:${callback.CheckoutRequestID}`;
+    
     const data = await redis.get(metaKey);
     if (!data) return console.warn("❌ No pending payment found in Redis");
 
-    const { orderId } = JSON.parse(data);
+    const { orderId, event_id, user_id } = JSON.parse(data);
 
     const metadata = callback.CallbackMetadata.Item;
     const amount = metadata.find((i) => i.Name === "Amount")?.Value;
@@ -128,7 +131,7 @@ exports.callback = async (req, res) => {
     });
 
     // Generate tickets
-    await ticketService.generateTicketsFromOrder(orderId);
+    await ticketService.generateTickets_int(orderId, user_id, event_id);
 
     console.log("✅ Payment processed and tickets generated for order:", orderId);
     await redis.del(metaKey); // remove pending payment

@@ -152,6 +152,147 @@ exports.generateTickets = (req, res) => {
 
 };
 
+exports.generateTickets_int = async  (order_id ,user_id,event_id) => {
+
+  if (!order_id) {
+    return res.status(400).json({
+      success: false,
+      message: "order_id is required"
+    });
+  }
+
+  db.getConnection((err, connection) => {
+
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+
+    connection.beginTransaction((err) => {
+
+      if (err) {
+        connection.release();
+        return res.status(500).json({ error: err.message });
+      }
+
+      // 1️⃣ get seats for order
+      connection.query(
+        "SELECT seat_id FROM order_items WHERE order_id = ?",
+        [order_id],
+        (err, items) => {
+
+          if (err) {
+            return connection.rollback(() => {
+              connection.release();
+              res.status(500).json({ error: err.message });
+            });
+          }
+
+          if (!items.length) {
+            return connection.rollback(() => {
+              connection.release();
+              res.status(400).json({
+                success: false,
+                message: "No seats found for this order"
+              });
+            });
+          }
+
+          const tickets = [];
+          let completed = 0;
+
+          items.forEach((item) => {
+
+            const ticketId = uuidv4();
+            const qrToken = crypto.randomBytes(20).toString("hex");
+
+            // 2️⃣ insert ticket
+            connection.query(
+              `INSERT INTO tickets
+              (id, order_id, user_id,event_id, seat_id, qr_token,qr_code, status)
+              VALUES (?,?,?,?,?,?,?,?)`,
+              [
+                ticketId,
+                order_id,
+                user_id,
+                event_id,
+                item.seat_id,
+                qrToken,
+                qrToken,
+                "valid"
+              ],
+              (err) => {
+
+                if (err) {
+                  return connection.rollback(() => {
+                    connection.release();
+                    res.status(500).json({ error: err.message });
+                  });
+                }
+
+                // 3️⃣ mark seat sold
+                connection.query(
+                  "UPDATE seats SET status='sold' WHERE id=?",
+                  [item.seat_id],
+                  (err) => {
+
+                    if (err) {
+                      return connection.rollback(() => {
+                        connection.release();
+                        res.status(500).json({ error: err.message });
+                      });
+                    }
+
+                    tickets.push({
+                      ticket_id: ticketId,
+                      seat_id: item.seat_id,
+                      qr_token: qrToken,
+                      status: "valid"
+                    });
+
+                    completed++;
+
+                    // when all seats processed
+                    if (completed === items.length) {
+
+                      connection.commit((err) => {
+
+                        if (err) {
+                          return connection.rollback(() => {
+                            connection.release();
+                            res.status(500).json({ error: err.message });
+                          });
+                        }
+
+                        connection.release();
+
+                        return res.json({
+                          success: true,
+                          message: "Tickets generated successfully",
+                          order_id,
+                          tickets
+                        });
+
+                      });
+
+                    }
+
+                  }
+                );
+
+              }
+            );
+
+          });
+
+        }
+      );
+
+    });
+
+  });
+
+};
+
 // ======================================================
 // GET USER TICKETS
 // ======================================================
