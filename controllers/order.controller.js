@@ -15,8 +15,8 @@ exports.createOrder = async (req, res) => {
   const orderId = uuidv4();
 
   try {
-    // 1️⃣ Calculate total amount from frontend prices
-    const totalAmount = items.reduce((sum, s) => sum + parseFloat(s.price), 0);
+    // 1️⃣ Calculate total amount from frontend prices.// items.reduce((sum, s) => sum + parseFloat(s.price), 0);
+    const totalAmount = "1";
 
     console.log("Creating order:", { orderId, event_id, user_uid, phone, totalAmount });
     // 2️⃣ Insert order
