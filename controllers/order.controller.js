@@ -61,9 +61,7 @@ exports.createOrder = async (req, res) => {
 // GET ORDERS BY USER_ID
 // ======================================================
 exports.getUserOrder = (req, res) => {
-
   const { user_id } = req.params;
-
   db.query(
     `
     SELECT 
@@ -92,7 +90,6 @@ exports.getUserOrder = (req, res) => {
 
     }
   );
-
 };
 
 
