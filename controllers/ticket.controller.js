@@ -152,7 +152,7 @@ exports.generateTickets = (req, res) => {
 
 };
 
-exports.generateTickets_int = async  ({orderId ,user_uid,event_id}) => {
+exports.generateTickets_int = async  (orderId ,user_uid,event_id) => {
 
   if (!orderId) {
     console.log({
