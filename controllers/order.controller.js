@@ -56,6 +56,46 @@ exports.createOrder = async (req, res) => {
   }
 };
 
+
+// ======================================================
+// GET ORDERS BY USER_ID
+// ======================================================
+exports.getUserOrder = (req, res) => {
+
+  const { user_id } = req.params;
+
+  db.query(
+    `
+    SELECT 
+      o.id AS order_id,
+      o.event_id,
+      o.status,
+      o.phone,
+      o.total_amount,
+      s.seat_id
+    FROM orders o
+    JOIN order_items s ON o.id = s.order_id
+    WHERE o.user_id = ?
+    ORDER BY o.created_at DESC
+    `,
+    [user_id],
+    (err, results) => {
+
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+
+      res.json({
+        success: true,
+        orders: results
+      });
+
+    }
+  );
+
+};
+
+
 // ==========================
 // GET ALL ORDERS
 // ==========================
