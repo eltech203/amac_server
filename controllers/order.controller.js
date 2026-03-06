@@ -75,7 +75,7 @@ exports.getUserOrder = (req, res) => {
       s.seat_id
     FROM orders o
     JOIN order_items s ON o.id = s.order_id
-    WHERE o.user_id = ?
+    WHERE o.user_uid = ?
     ORDER BY o.created_at DESC
     `,
     [user_id],
