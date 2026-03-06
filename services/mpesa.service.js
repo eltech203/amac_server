@@ -32,14 +32,12 @@ async function getAccessToken() {
   return accessToken;
 }
 
-const paymentMetaStore = {}; // Temporary in-memory store (use Redis in production)
 // -----------------
 // Trigger STK Push
 // -----------------
-exports.stkPush = async ( {phone, amount, order_id, event_id, user_uid}) => {
+exports.stkPush = async ({ phone, amount, orderId,user_uid,event_id }) => {
   const token = await getAccessToken();
 
-  // Store metadata for callback reference
   const timestamp = moment().format("YYYYMMDDHHmmss");
   const password = Buffer.from(
     mpesaConfig.shortCode + mpesaConfig.passKey + timestamp
@@ -55,7 +53,7 @@ exports.stkPush = async ( {phone, amount, order_id, event_id, user_uid}) => {
     PartyB: mpesaConfig.shortCode,
     PhoneNumber: phone,
     CallBackURL: `${mpesaConfig.callbackURL}/api/payment/callback`,
-    AccountReference: order_id,
+    AccountReference: orderId,
     TransactionDesc: "Event Ticket Payment",
   };
 
@@ -69,9 +67,9 @@ exports.stkPush = async ( {phone, amount, order_id, event_id, user_uid}) => {
   if (response.data.CheckoutRequestID) {
     await redis.set(
       `pending_payment:${response.data.CheckoutRequestID}`,
-      JSON.stringify({ order_id, event_id, user_uid }),
+      JSON.stringify({ orderId }),
       "EX",
-      200
+      100
     );
   }
 
@@ -89,11 +87,10 @@ exports.callback = async (req, res) => {
     if (!callback || callback.ResultCode !== 0) return;
 
     const metaKey = `pending_payment:${callback.CheckoutRequestID}`;
-    
     const data = await redis.get(metaKey);
     if (!data) return console.warn("❌ No pending payment found in Redis");
 
-    const { order_id, event_id, user_uid } = JSON.parse(data);
+    const { orderId } = JSON.parse(data);
 
     const metadata = callback.CallbackMetadata.Item;
     const amount = metadata.find((i) => i.Name === "Amount")?.Value;
@@ -104,7 +101,7 @@ exports.callback = async (req, res) => {
 
     // Update order status
     await new Promise((resolve, reject) => {
-      db.query("UPDATE orders SET status='paid' WHERE id=?", [order_id], (err) =>
+      db.query("UPDATE orders SET status='paid' WHERE id=?", [orderId], (err) =>
         err ? reject(err) : resolve()
       );
     });
@@ -113,7 +110,7 @@ exports.callback = async (req, res) => {
     await new Promise((resolve, reject) => {
       db.query(
         "INSERT INTO ticket_payments (id,order_id,mpesa_receipt_number,phone_number,amount_paid,status) VALUES (?,?,?,?,?,'completed')",
-        [paymentId, order_id, transID, phone, amount],
+        [paymentId, orderId, transID, phone, amount],
         (err) => (err ? reject(err) : resolve())
       );
     });
@@ -125,15 +122,15 @@ exports.callback = async (req, res) => {
          JOIN order_items oi ON s.id=oi.seat_id
          SET s.status='sold'
          WHERE oi.order_id=?`,
-        [order_id],
+        [orderId],
         (err) => (err ? reject(err) : resolve())
       );
     });
 
     // Generate tickets
-    await ticketService.generateTickets_int(order_id, user_uid, event_id);
+    await ticketService.generateTicketsFromOrder(orderId);
 
-    console.log("✅ Payment processed and tickets generated for order:", order_id);
+    console.log("✅ Payment processed and tickets generated for order:", orderId);
     await redis.del(metaKey); // remove pending payment
   } catch (err) {
     console.error("❌ STK callback error:", err.message);
