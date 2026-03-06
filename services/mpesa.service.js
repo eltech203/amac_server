@@ -67,7 +67,7 @@ exports.stkPush = async ({ phone, amount, orderId,user_uid,event_id }) => {
   if (response.data.CheckoutRequestID) {
     await redis.set(
       `pending_payment:${response.data.CheckoutRequestID}`,
-      JSON.stringify({ orderId }),
+      JSON.stringify({ orderId,user_uid,event_id }),
       "EX",
       100
     );
@@ -90,7 +90,7 @@ exports.callback = async (req, res) => {
     const data = await redis.get(metaKey);
     if (!data) return console.warn("❌ No pending payment found in Redis");
 
-    const { orderId } = JSON.parse(data);
+    const { orderId, user_uid, event_id } = JSON.parse(data);
 
     const metadata = callback.CallbackMetadata.Item;
     const amount = metadata.find((i) => i.Name === "Amount")?.Value;
@@ -128,7 +128,7 @@ exports.callback = async (req, res) => {
     });
 
     // Generate tickets
-    await ticketService.generateTicketsFromOrder(orderId);
+    await ticketService.generateTickets_int(orderId,user_uid,event_id);
 
     console.log("✅ Payment processed and tickets generated for order:", orderId);
     await redis.del(metaKey); // remove pending payment

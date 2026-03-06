@@ -152,9 +152,9 @@ exports.generateTickets = (req, res) => {
 
 };
 
-exports.generateTickets_int = async  ({order_id ,user_uid,event_id}) => {
+exports.generateTickets_int = async  ({orderId ,user_uid,event_id}) => {
 
-  if (!order_id) {
+  if (!orderId) {
     return {
       success: false,
       message: "order_id is required"
@@ -177,7 +177,7 @@ exports.generateTickets_int = async  ({order_id ,user_uid,event_id}) => {
       // 1️⃣ get seats for order
       connection.query(
         "SELECT seat_id FROM order_items WHERE order_id = ?",
-        [order_id],
+        [orderId],
         (err, items) => {
 
           if (err) {
@@ -209,7 +209,7 @@ exports.generateTickets_int = async  ({order_id ,user_uid,event_id}) => {
               VALUES (?,?,?,?,?,?,?,?)`,
               [
                 ticketId,
-                order_id,
+                orderId,
                 user_uid,
                 event_id,
                 item.seat_id,
@@ -265,7 +265,7 @@ exports.generateTickets_int = async  ({order_id ,user_uid,event_id}) => {
                         return {
                           success: true,
                           message: "Tickets generated successfully",
-                          order_id,
+                          orderId,
                           tickets
                         };
 
