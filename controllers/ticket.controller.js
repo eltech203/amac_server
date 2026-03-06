@@ -155,6 +155,10 @@ exports.generateTickets = (req, res) => {
 exports.generateTickets_int = async  ({orderId ,user_uid,event_id}) => {
 
   if (!orderId) {
+    console.log({
+      success: false,
+      message: "order_id is required"
+    })
     return {
       success: false,
       message: "order_id is required"
@@ -190,6 +194,7 @@ exports.generateTickets_int = async  ({orderId ,user_uid,event_id}) => {
           if (!items.length) {
             return connection.rollback(() => {
               connection.release();
+              console.log({ error: "No seats found for this order" })
               return { error: "No seats found for this order" };
             });
           }
@@ -261,7 +266,12 @@ exports.generateTickets_int = async  ({orderId ,user_uid,event_id}) => {
                         }
 
                         connection.release();
-
+                        console.log({
+                          success: true,
+                          message: "Tickets generated successfully",
+                          orderId,
+                          tickets
+                        })
                         return {
                           success: true,
                           message: "Tickets generated successfully",
