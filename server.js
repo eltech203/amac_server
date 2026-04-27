@@ -7,8 +7,6 @@ const routes = require('./routes/tickets');
 const app = express();
 require('dotenv').config();
 
-const cors = require("cors");
-
 app.use(cors({
   origin: "*", // 🔥 allow all (for now)
   methods: ["GET", "POST", "PUT", "DELETE","PATCH"],
