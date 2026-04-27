@@ -168,7 +168,7 @@ router.post("/callback", async function (req, res) {
       "Mpesa",
       transID,
       "Completed",
-      phone || null,
+      phone,
     ];
 
     db.query(sql, values, (err, result) => {
