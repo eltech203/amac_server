@@ -7,7 +7,13 @@ const routes = require('./routes/tickets');
 const app = express();
 require('dotenv').config();
 
-app.use(cors());
+const cors = require("cors");
+
+app.use(cors({
+  origin: "*", // 🔥 allow all (for now)
+  methods: ["GET", "POST", "PUT", "DELETE","PATCH"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
