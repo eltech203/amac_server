@@ -2,9 +2,9 @@ const db = require("../config/db.js");
 const redisClient = require("../config/redis.js");
 
 /**
- * Cache settings
+ * Cache TTLs
  */
-const LIVE_RESULTS_TTL = 60; // 1 minute
+const LIVE_RESULTS_TTL = 60;
 const DASHBOARD_TTL = 60;
 const CHART_TTL = 60;
 const RAW_VOTES_TTL = 60;
@@ -43,7 +43,7 @@ async function safeRedisDel(key) {
 
 /**
  * Clear vote-related caches.
- * Call this after a successful vote insert/payment callback.
+ * Call this after successful vote/payment callback.
  */
 async function clearVoteCaches(categoryId = null) {
   const keys = [
@@ -57,15 +57,17 @@ async function clearVoteCaches(categoryId = null) {
     "votes:votes_per_category",
     "votes:summary",
     "votes:raw",
+    "votes:grouped",
     "live_results:all",
     "nominee_results",
-    "election_results",
+    "election_results"
   ];
 
   if (categoryId) {
     keys.push(`votes:overview:category:${categoryId}`);
     keys.push(`votes:summary:${categoryId}`);
     keys.push(`votes:${categoryId}`);
+    keys.push(`votes:category:${categoryId}`);
     keys.push(`live_results:${categoryId}`);
   }
 
@@ -75,23 +77,22 @@ async function clearVoteCaches(categoryId = null) {
 exports.clearVoteCaches = clearVoteCaches;
 
 /**
- * MAIN LIVE RESULTS ENDPOINT
+ * Test route helper
+ * GET /api/votes/test
+ */
+exports.testVotesRoute = async (req, res) => {
+  return res.json({
+    success: true,
+    message: "Votes route is working"
+  });
+};
+
+/**
+ * Main live results endpoint
  *
  * GET /api/votes/overview
  * GET /api/votes/overview/:categoryId
- *
- * Response:
- * {
- *   success: true,
- *   refreshed_every_seconds: 60,
- *   lastFetchedAt: "...",
- *   grand_total_votes: 100,
- *   category_count: 2,
- *   results: [...]
- * }
  */
-
-
 exports.getOverview = async (req, res) => {
   try {
     const categoryId = req.params.categoryId || null;
@@ -101,6 +102,7 @@ exports.getOverview = async (req, res) => {
       : "votes:overview:all";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -114,12 +116,14 @@ exports.getOverview = async (req, res) => {
         n.name AS nominee_name,
         n.location,
         n.church,
-        n.county,
+        n.county_id,
+        co.name AS county_name,
 
         IFNULL(SUM(v.vote_count), 0) AS votes
 
       FROM categories c
       LEFT JOIN nominees n ON n.category_id = c.id
+      LEFT JOIN counties co ON co.id = n.county_id
       LEFT JOIN votes v ON v.candidate_id = n.id
 
       ${categoryId ? "WHERE c.id = ?" : ""}
@@ -131,7 +135,8 @@ exports.getOverview = async (req, res) => {
         n.name,
         n.location,
         n.church,
-        n.county
+        n.county_id,
+        co.name
 
       ORDER BY
         c.name ASC,
@@ -156,13 +161,16 @@ exports.getOverview = async (req, res) => {
           leader_nominee_id: null,
           leader_name: null,
           lastFetchedAt: generatedAt,
-          nominees: [],
+          nominees: []
         });
       }
 
       const category = categoryMap.get(row.category_id);
 
-      // Protect empty categories with no nominees
+      /**
+       * If category has no nominees, nominee_id will be null.
+       * We still keep the category but don't push a nominee.
+       */
       if (row.nominee_id) {
         const votes = Number(row.votes || 0);
 
@@ -171,12 +179,15 @@ exports.getOverview = async (req, res) => {
           nominee_name: row.nominee_name,
           location: row.location,
           church: row.church,
-          county: row.county,
+
+          county_id: row.county_id,
+          county_name: row.county_name,
+
           votes,
           total_votes: votes,
           percentage: 0,
           is_leader: false,
-          rank: null,
+          rank: null
         });
 
         category.total_votes += votes;
@@ -230,7 +241,7 @@ exports.getOverview = async (req, res) => {
       lastFetchedAt: generatedAt,
       grand_total_votes: grandTotalVotes,
       category_count: results.length,
-      results,
+      results
     };
 
     await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(payload));
@@ -238,9 +249,11 @@ exports.getOverview = async (req, res) => {
     return res.json(payload);
   } catch (err) {
     console.error("❌ Error in getOverview:", err);
+
     return res.status(500).json({
       success: false,
       error: "Server error",
+      message: err.message
     });
   }
 };
@@ -253,6 +266,7 @@ exports.getOverallLeader = async (req, res) => {
     const cacheKey = "votes:overall_leader";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -266,12 +280,14 @@ exports.getOverallLeader = async (req, res) => {
         n.name AS nominee_name,
         n.location,
         n.church,
-        n.county,
+        n.county_id,
+        co.name AS county_name,
 
         IFNULL(SUM(v.vote_count), 0) AS total_votes
 
       FROM nominees n
       JOIN categories c ON n.category_id = c.id
+      LEFT JOIN counties co ON co.id = n.county_id
       LEFT JOIN votes v ON v.candidate_id = n.id
 
       GROUP BY
@@ -281,7 +297,8 @@ exports.getOverallLeader = async (req, res) => {
         n.name,
         n.location,
         n.church,
-        n.county
+        n.county_id,
+        co.name
 
       ORDER BY total_votes DESC, n.name ASC
       LIMIT 1
@@ -292,7 +309,7 @@ exports.getOverallLeader = async (req, res) => {
     const payload = {
       success: true,
       leader,
-      lastFetchedAt: new Date().toISOString(),
+      lastFetchedAt: new Date().toISOString()
     };
 
     await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(payload));
@@ -300,9 +317,11 @@ exports.getOverallLeader = async (req, res) => {
     return res.json(payload);
   } catch (err) {
     console.error("❌ Error fetching overall leader:", err);
+
     return res.status(500).json({
       success: false,
       error: "Server error",
+      message: err.message
     });
   }
 };
@@ -311,7 +330,7 @@ exports.getOverallLeader = async (req, res) => {
  * GET /api/votes/live-results
  * GET /api/votes/live-results?category_id=1
  *
- * Kept for backward compatibility.
+ * Backward compatible.
  */
 exports.getLiveResults = async (req, res) => {
   try {
@@ -322,59 +341,130 @@ exports.getLiveResults = async (req, res) => {
     return exports.getOverview(req, res);
   } catch (err) {
     console.error("❌ Error fetching live results:", err);
+
     return res.status(500).json({
       success: false,
       error: "Server error",
+      message: err.message
     });
   }
 };
 
 /**
  * GET /api/votes/summary
- *
- * Similar to overview but returns only results array.
  */
 exports.getVotesSummary = async (req, res) => {
   try {
     const cacheKey = "votes:summary";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
-    const fakeReq = {
-      params: {},
-    };
+    const [rows] = await db.promise().query(`
+      SELECT
+        c.id AS category_id,
+        c.name AS category_name,
 
-    let payload = null;
+        n.id AS nominee_id,
+        n.name AS nominee_name,
+        n.location,
+        n.church,
+        n.county_id,
+        co.name AS county_name,
 
-    const fakeRes = {
-      json(data) {
-        payload = data;
-      },
-      status(code) {
-        return {
-          json(data) {
-            payload = {
-              statusCode: code,
-              ...data,
-            };
-          },
-        };
-      },
-    };
+        IFNULL(SUM(v.vote_count), 0) AS votes
 
-    await exports.getOverview(fakeReq, fakeRes);
+      FROM categories c
+      LEFT JOIN nominees n ON n.category_id = c.id
+      LEFT JOIN counties co ON co.id = n.county_id
+      LEFT JOIN votes v ON v.candidate_id = n.id
 
-    const results = payload && payload.results ? payload.results : [];
+      GROUP BY
+        c.id,
+        c.name,
+        n.id,
+        n.name,
+        n.location,
+        n.church,
+        n.county_id,
+        co.name
+
+      ORDER BY c.name ASC, votes DESC, n.name ASC
+    `);
+
+    const categoryMap = new Map();
+    let grandTotal = 0;
+
+    for (const row of rows) {
+      if (!categoryMap.has(row.category_id)) {
+        categoryMap.set(row.category_id, {
+          category_id: row.category_id,
+          category_name: row.category_name,
+          total_votes: 0,
+          category_percentage: 0,
+          nominees: []
+        });
+      }
+
+      const cat = categoryMap.get(row.category_id);
+
+      if (row.nominee_id) {
+        const nomineeVotes = Number(row.votes || 0);
+
+        cat.nominees.push({
+          nominee_id: row.nominee_id,
+          nominee_name: row.nominee_name,
+          location: row.location,
+          church: row.church,
+          county_id: row.county_id,
+          county_name: row.county_name,
+          votes: nomineeVotes,
+          total_votes: nomineeVotes,
+          percentage: 0,
+          is_leader: false,
+          rank: null
+        });
+
+        cat.total_votes += nomineeVotes;
+        grandTotal += nomineeVotes;
+      }
+    }
+
+    const results = [];
+
+    for (const cat of categoryMap.values()) {
+      cat.nominees.sort((a, b) => b.votes - a.votes);
+
+      const maxVotes = cat.nominees.length ? cat.nominees[0].votes : 0;
+
+      cat.nominees = cat.nominees.map((nominee, index) => {
+        nominee.rank = index + 1;
+        nominee.percentage =
+          cat.total_votes > 0 ? round2((nominee.votes / cat.total_votes) * 100) : 0;
+        nominee.is_leader = nominee.votes === maxVotes && maxVotes > 0;
+
+        return nominee;
+      });
+
+      cat.category_percentage =
+        grandTotal > 0 ? round2((cat.total_votes / grandTotal) * 100) : 0;
+
+      results.push(cat);
+    }
 
     await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(results));
 
     return res.json(results);
   } catch (err) {
     console.error("❌ Error fetching votes summary:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
@@ -387,14 +477,15 @@ exports.getVotesSummaryByCategory = async (req, res) => {
     const cacheKey = `votes:summary:${categoryId}`;
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
     const fakeReq = {
       params: {
-        categoryId,
-      },
+        categoryId
+      }
     };
 
     let payload = null;
@@ -408,11 +499,11 @@ exports.getVotesSummaryByCategory = async (req, res) => {
           json(data) {
             payload = {
               statusCode: code,
-              ...data,
+              ...data
             };
-          },
+          }
         };
-      },
+      }
     };
 
     await exports.getOverview(fakeReq, fakeRes);
@@ -424,14 +515,16 @@ exports.getVotesSummaryByCategory = async (req, res) => {
     return res.json(results);
   } catch (err) {
     console.error("❌ Error fetching category votes summary:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
- * GET /api/votes/category/:categoryId
- *
- * Returns one category object.
+ * GET /api/votes/summaryCat/:categoryId
  */
 exports.getVotesByCategoryId = async (req, res) => {
   try {
@@ -439,14 +532,15 @@ exports.getVotesByCategoryId = async (req, res) => {
     const cacheKey = `votes:category:${categoryId}`;
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
     const fakeReq = {
       params: {
-        categoryId,
-      },
+        categoryId
+      }
     };
 
     let payload = null;
@@ -460,11 +554,11 @@ exports.getVotesByCategoryId = async (req, res) => {
           json(data) {
             payload = {
               statusCode: code,
-              ...data,
+              ...data
             };
-          },
+          }
         };
-      },
+      }
     };
 
     await exports.getOverview(fakeReq, fakeRes);
@@ -476,7 +570,7 @@ exports.getVotesByCategoryId = async (req, res) => {
 
     if (!result) {
       return res.status(404).json({
-        message: "Category not found or no nominees",
+        message: "Category not found or no nominees"
       });
     }
 
@@ -485,26 +579,29 @@ exports.getVotesByCategoryId = async (req, res) => {
     return res.json(result);
   } catch (err) {
     console.error("❌ Error fetching votes by category:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
- * GET /api/votes/nominee-results
- *
- * Kept for old frontend compatibility.
+ * GET /api/votes/resultsNominees
  */
 exports.getNomineeResults = async (req, res) => {
   try {
     const cacheKey = "nominee_results";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
     const fakeReq = {
-      params: {},
+      params: {}
     };
 
     let payload = null;
@@ -518,11 +615,11 @@ exports.getNomineeResults = async (req, res) => {
           json(data) {
             payload = {
               statusCode: code,
-              ...data,
+              ...data
             };
-          },
+          }
         };
-      },
+      }
     };
 
     await exports.getOverview(fakeReq, fakeRes);
@@ -534,26 +631,29 @@ exports.getNomineeResults = async (req, res) => {
     return res.json(results);
   } catch (err) {
     console.error("❌ Error fetching nominee results:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
  * GET /api/votes/results
- *
- * Kept for old frontend compatibility.
  */
 exports.getResults = async (req, res) => {
   try {
     const cacheKey = "election_results";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
     const fakeReq = {
-      params: {},
+      params: {}
     };
 
     let payload = null;
@@ -567,11 +667,11 @@ exports.getResults = async (req, res) => {
           json(data) {
             payload = {
               statusCode: code,
-              ...data,
+              ...data
             };
-          },
+          }
         };
-      },
+      }
     };
 
     await exports.getOverview(fakeReq, fakeRes);
@@ -582,27 +682,30 @@ exports.getResults = async (req, res) => {
 
     return res.json(results);
   } catch (err) {
-    console.error("❌ Error fetching election results:", err);
-    return res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching results:", err);
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
- * GET /api/votes/get-votes
- *
- * Kept for old compatibility.
+ * GET /api/votes/getVotes
  */
 exports.getVotes = async (req, res) => {
   try {
     const cacheKey = "votes:grouped";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
     const fakeReq = {
-      params: {},
+      params: {}
     };
 
     let payload = null;
@@ -616,11 +719,11 @@ exports.getVotes = async (req, res) => {
           json(data) {
             payload = {
               statusCode: code,
-              ...data,
+              ...data
             };
-          },
+          }
         };
-      },
+      }
     };
 
     await exports.getOverview(fakeReq, fakeRes);
@@ -632,20 +735,23 @@ exports.getVotes = async (req, res) => {
     return res.json(results);
   } catch (err) {
     console.error("❌ Error fetching grouped votes:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
  * GET /api/votes/get-all-votes
- *
- * Raw vote rows for admin dashboard.
  */
 exports.getAllvotes = async (req, res) => {
   try {
     const cacheKey = "votes:raw";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -666,7 +772,10 @@ exports.getAllvotes = async (req, res) => {
     return res.json(rows);
   } catch (error) {
     console.error("❌ Error fetching all votes:", error);
-    return res.status(500).json({ error: error.message });
+
+    return res.status(500).json({
+      error: error.message
+    });
   }
 };
 
@@ -678,6 +787,7 @@ exports.getDashboardTotals = async (req, res) => {
     const cacheKey = "votes:totals";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -690,8 +800,6 @@ exports.getDashboardTotals = async (req, res) => {
     const [[payments]] = await db.promise().query(`
       SELECT IFNULL(SUM(amount_paid), 0) AS total_revenue
       FROM payments
-      WHERE payment_status IN ('Paid', 'Success', 'Completed', 'SUCCESS', 'COMPLETED')
-         OR payment_status IS NULL
     `);
 
     const [[nominees]] = await db.promise().query(`
@@ -709,7 +817,7 @@ exports.getDashboardTotals = async (req, res) => {
       total_revenue: Number(payments.total_revenue || 0),
       total_nominees: Number(nominees.total_nominees || 0),
       total_categories: Number(categories.total_categories || 0),
-      lastFetchedAt: new Date().toISOString(),
+      lastFetchedAt: new Date().toISOString()
     };
 
     await safeRedisSetEx(cacheKey, DASHBOARD_TTL, JSON.stringify(data));
@@ -717,11 +825,16 @@ exports.getDashboardTotals = async (req, res) => {
     return res.json(data);
   } catch (err) {
     console.error("❌ Error fetching dashboard totals:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
+ * GET /api/votes/payment-summaery
  * GET /api/votes/payments-summary
  */
 exports.getPaymentsSummary = async (req, res) => {
@@ -729,6 +842,7 @@ exports.getPaymentsSummary = async (req, res) => {
     const cacheKey = "votes:payments_summary";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -748,18 +862,23 @@ exports.getPaymentsSummary = async (req, res) => {
     return res.json(rows);
   } catch (err) {
     console.error("❌ Error fetching payments summary:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
- * GET /api/votes/activity-hourly
+ * GET /api/votes/voting-activity
  */
 exports.getVotingActivity = async (req, res) => {
   try {
     const cacheKey = "votes:activity:hourly";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -778,18 +897,24 @@ exports.getVotingActivity = async (req, res) => {
     return res.json(rows);
   } catch (err) {
     console.error("❌ Error fetching voting activity:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
- * GET /api/votes/nominees-per-category
+ * GET /api/votes/categoty-activity
+ * GET /api/votes/category-activity
  */
 exports.getNomineesPerCategory = async (req, res) => {
   try {
     const cacheKey = "nominees:per-category";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -810,7 +935,11 @@ exports.getNomineesPerCategory = async (req, res) => {
     return res.json(rows);
   } catch (err) {
     console.error("❌ Error fetching nominees per category:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
@@ -822,6 +951,7 @@ exports.getTopNominees = async (req, res) => {
     const cacheKey = "votes:top_nominees";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -834,10 +964,12 @@ exports.getTopNominees = async (req, res) => {
         n.name AS nominee_name,
         n.location,
         n.church,
-        n.county,
+        n.county_id,
+        co.name AS county_name,
         IFNULL(SUM(v.vote_count), 0) AS total_votes
       FROM nominees n
       JOIN categories c ON n.category_id = c.id
+      LEFT JOIN counties co ON co.id = n.county_id
       LEFT JOIN votes v ON v.candidate_id = n.id
       GROUP BY
         c.id,
@@ -846,7 +978,8 @@ exports.getTopNominees = async (req, res) => {
         n.name,
         n.location,
         n.church,
-        n.county
+        n.county_id,
+        co.name
       ORDER BY total_votes DESC, n.name ASC
       LIMIT 20
     `);
@@ -856,18 +989,23 @@ exports.getTopNominees = async (req, res) => {
     return res.json(rows);
   } catch (err) {
     console.error("❌ Error fetching top nominees:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
- * GET /api/votes/votes-per-category
+ * GET /api/votes/vote-category
  */
 exports.getVotesPerCategory = async (req, res) => {
   try {
     const cacheKey = "votes:votes_per_category";
 
     const cached = await safeRedisGet(cacheKey);
+
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -889,13 +1027,16 @@ exports.getVotesPerCategory = async (req, res) => {
     return res.json(rows);
   } catch (err) {
     console.error("❌ Error fetching votes per category:", err);
-    return res.status(500).json({ error: "Server error" });
+
+    return res.status(500).json({
+      error: "Server error",
+      message: err.message
+    });
   }
 };
 
 /**
  * POST /api/votes/clear-cache
- * Optional admin endpoint.
  */
 exports.clearVoteCacheEndpoint = async (req, res) => {
   try {
@@ -905,13 +1046,15 @@ exports.clearVoteCacheEndpoint = async (req, res) => {
 
     return res.json({
       success: true,
-      message: "Vote caches cleared successfully",
+      message: "Vote caches cleared successfully"
     });
   } catch (err) {
     console.error("❌ Error clearing vote cache:", err);
+
     return res.status(500).json({
       success: false,
       error: "Server error",
+      message: err.message
     });
   }
 };
