@@ -201,7 +201,7 @@ router.post("/callback", async function (req, res) {
 
 router.post(
     "/mpesa_stk_push/query",access,function(req, res, next) {
-        let _checkoutRequestId = req.body.checkoutRequestId;
+        let _checkoutRequestId = req.body.CheckoutRequestID;
 
        let auth = "Bearer " + req.access_token;
 
