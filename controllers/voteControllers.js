@@ -90,6 +90,8 @@ exports.clearVoteCaches = clearVoteCaches;
  *   results: [...]
  * }
  */
+
+
 exports.getOverview = async (req, res) => {
   try {
     const categoryId = req.params.categoryId || null;
