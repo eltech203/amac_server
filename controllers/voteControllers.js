@@ -1,107 +1,148 @@
-const db = require("../config/db.js") ;
-const redisClient =require("../config/redis.js") ;
+const db = require("../config/db.js");
+const redisClient = require("../config/redis.js");
 
+/**
+ * Cache settings
+ */
+const LIVE_RESULTS_TTL = 60; // 1 minute
+const DASHBOARD_TTL = 60;
+const CHART_TTL = 60;
+const RAW_VOTES_TTL = 60;
 
-exports.getNomineeResults = async (req, res) => {
+/**
+ * Helpers
+ */
+function round2(n) {
+  return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
+}
+
+async function safeRedisGet(key) {
   try {
-    const cacheKey = "nominee_results";
-
-    // 1️⃣ Check Redis cache
-    const cached = await redisClient.get(cacheKey);
-    if (cached) {
-      console.log("✅ Results served from Redis");
-      return res.json(JSON.parse(cached));
-    }
-
-    // 2️⃣ Query MySQL if no cache
-    const [rows] = await db.promise().query(`
-      SELECT 
-        c.id AS category_id,
-        c.name AS category_name,
-        n.id AS nominee_id,
-        n.name AS nominee_name,
-        n.county AS nominee_county,       -- 🟢 county
-        n.church AS nominee_church,       -- 🟢 church
-        IFNULL(SUM(v.vote_count), 0) AS total_votes,
-        ROUND(
-          (IFNULL(SUM(v.vote_count), 0) / NULLIF(
-            (SELECT SUM(v2.vote_count) 
-             FROM votes v2 
-             JOIN nominees n2 ON v2.candidate_id = n2.id 
-             WHERE n2.category_id = c.id), 0
-          ) * 100), 2
-        ) AS percentage
-      FROM nominees n
-      JOIN votes c ON n.category_id = c.id
-      LEFT JOIN votes v ON v.candidate_id = n.id
-      GROUP BY c.id, c.name, n.id, n.name, n.county, n.church
-      ORDER BY c.id, total_votes DESC
-    `);
-
-    // 3️⃣ Group nominees under votes
-    const results = rows.reduce((acc, row) => {
-      let category = acc.find(c => c.category_id === row.category_id);
-      if (!category) {
-        category = {
-          category_id: row.category_id,
-          category_name: row.category_name,
-          nominees: []
-        };
-        acc.push(category);
-      }
-      category.nominees.push({
-        nominee_id: row.nominee_id,
-        nominee_name: row.nominee_name,
-        county: row.nominee_county,   // 🟢 include county
-        church: row.nominee_church,   // 🟢 include church
-        total_votes: row.total_votes,
-        percentage: row.percentage
-      });
-      return acc;
-    }, []);
-
-    // 4️⃣ Save to Redis (expires in 60s)
-    await redisClient.setEx(cacheKey, 60, JSON.stringify(results));
-
-    console.log("✅ Results fetched from DB & cached");
-    res.json(results);
+    return await redisClient.get(key);
   } catch (err) {
-    console.error("❌ Error fetching nominee results:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("Redis GET error:", err.message);
+    return null;
   }
-};
+}
 
-
-// Get votes grouped by category and nominee (with location & church)
-
-
-exports.getVotesSummary = async (req, res) => {
+async function safeRedisSetEx(key, ttl, value) {
   try {
-    const cacheKey = "votes:summary";
-    const cached = await redisClient.get(cacheKey);
+    await redisClient.setEx(key, ttl, value);
+  } catch (err) {
+    console.error("Redis SETEX error:", err.message);
+  }
+}
+
+async function safeRedisDel(key) {
+  try {
+    await redisClient.del(key);
+  } catch (err) {
+    console.error(`Redis DEL error for ${key}:`, err.message);
+  }
+}
+
+/**
+ * Clear vote-related caches.
+ * Call this after a successful vote insert/payment callback.
+ */
+async function clearVoteCaches(categoryId = null) {
+  const keys = [
+    "votes:overview:all",
+    "votes:overall_leader",
+    "votes:totals",
+    "votes:payments_summary",
+    "votes:activity:hourly",
+    "nominees:per-category",
+    "votes:top_nominees",
+    "votes:votes_per_category",
+    "votes:summary",
+    "votes:raw",
+    "live_results:all",
+    "nominee_results",
+    "election_results",
+  ];
+
+  if (categoryId) {
+    keys.push(`votes:overview:category:${categoryId}`);
+    keys.push(`votes:summary:${categoryId}`);
+    keys.push(`votes:${categoryId}`);
+    keys.push(`live_results:${categoryId}`);
+  }
+
+  await Promise.all(keys.map((key) => safeRedisDel(key)));
+}
+
+exports.clearVoteCaches = clearVoteCaches;
+
+/**
+ * MAIN LIVE RESULTS ENDPOINT
+ *
+ * GET /api/votes/overview
+ * GET /api/votes/overview/:categoryId
+ *
+ * Response:
+ * {
+ *   success: true,
+ *   refreshed_every_seconds: 60,
+ *   lastFetchedAt: "...",
+ *   grand_total_votes: 100,
+ *   category_count: 2,
+ *   results: [...]
+ * }
+ */
+exports.getOverview = async (req, res) => {
+  try {
+    const categoryId = req.params.categoryId || null;
+
+    const cacheKey = categoryId
+      ? `votes:overview:category:${categoryId}`
+      : "votes:overview:all";
+
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
-    const [rows] = await db.promise().query(`
-      SELECT 
+    const sql = `
+      SELECT
         c.id AS category_id,
         c.name AS category_name,
+
         n.id AS nominee_id,
         n.name AS nominee_name,
         n.location,
         n.church,
-        IFNULL(SUM(v.vote_count), 0) AS votes
-      FROM nominees n
-      JOIN categories c ON n.category_id = c.id
-      LEFT JOIN votes v ON v.candidate_id = n.id
-      GROUP BY n.id, n.name, n.location, n.church, c.id, c.name
-      ORDER BY c.id, votes DESC, n.name ASC
-    `);
+        n.county,
 
-    // 🧮 Group nominees by category
+        IFNULL(SUM(v.vote_count), 0) AS votes
+
+      FROM categories c
+      LEFT JOIN nominees n ON n.category_id = c.id
+      LEFT JOIN votes v ON v.candidate_id = n.id
+
+      ${categoryId ? "WHERE c.id = ?" : ""}
+
+      GROUP BY
+        c.id,
+        c.name,
+        n.id,
+        n.name,
+        n.location,
+        n.church,
+        n.county
+
+      ORDER BY
+        c.name ASC,
+        votes DESC,
+        n.name ASC
+    `;
+
+    const params = categoryId ? [categoryId] : [];
+    const [rows] = await db.promise().query(sql, params);
+
     const categoryMap = new Map();
-    let grandTotal = 0;
+    let grandTotalVotes = 0;
+    const generatedAt = new Date().toISOString();
 
     for (const row of rows) {
       if (!categoryMap.has(row.category_id)) {
@@ -109,541 +150,614 @@ exports.getVotesSummary = async (req, res) => {
           category_id: row.category_id,
           category_name: row.category_name,
           total_votes: 0,
-          nominees: []
+          category_percentage: 0,
+          leader_nominee_id: null,
+          leader_name: null,
+          lastFetchedAt: generatedAt,
+          nominees: [],
         });
       }
-      const cat = categoryMap.get(row.category_id);
 
-      const nominee = {
-        nominee_id: row.nominee_id,
-        nominee_name: row.nominee_name,
-        location: row.location,
-        church: row.church,
-        votes: Number(row.votes)
-      };
+      const category = categoryMap.get(row.category_id);
 
-      cat.nominees.push(nominee);
-      cat.total_votes += nominee.votes;
-      grandTotal += nominee.votes;
+      // Protect empty categories with no nominees
+      if (row.nominee_id) {
+        const votes = Number(row.votes || 0);
+
+        category.nominees.push({
+          nominee_id: row.nominee_id,
+          nominee_name: row.nominee_name,
+          location: row.location,
+          church: row.church,
+          county: row.county,
+          votes,
+          total_votes: votes,
+          percentage: 0,
+          is_leader: false,
+          rank: null,
+        });
+
+        category.total_votes += votes;
+        grandTotalVotes += votes;
+      }
     }
 
-    // 🎯 Add percentages
     const results = [];
-    for (const cat of categoryMap.values()) {
-      // nominee percentages
-      for (const nominee of cat.nominees) {
+
+    for (const category of categoryMap.values()) {
+      category.nominees.sort((a, b) => {
+        return (
+          b.votes - a.votes ||
+          String(a.nominee_name || "").localeCompare(String(b.nominee_name || ""))
+        );
+      });
+
+      const maxVotes = category.nominees.length ? category.nominees[0].votes : 0;
+
+      category.nominees = category.nominees.map((nominee, index) => {
+        nominee.rank = index + 1;
+
         nominee.percentage =
-          cat.total_votes > 0 ? round2((nominee.votes / cat.total_votes) * 100) : 0;
+          category.total_votes > 0
+            ? round2((nominee.votes / category.total_votes) * 100)
+            : 0;
+
+        nominee.is_leader = nominee.votes === maxVotes && maxVotes > 0;
+
+        return nominee;
+      });
+
+      const leader = category.nominees.find((n) => n.is_leader);
+
+      if (leader) {
+        category.leader_nominee_id = leader.nominee_id;
+        category.leader_name = leader.nominee_name;
       }
 
-      // category percentage
-      cat.category_percentage =
-        grandTotal > 0 ? round2((cat.total_votes / grandTotal) * 100) : 0;
+      category.category_percentage =
+        grandTotalVotes > 0
+          ? round2((category.total_votes / grandTotalVotes) * 100)
+          : 0;
 
-      results.push(cat);
+      results.push(category);
     }
 
-    // cache for 30s
-    await redisClient.setEx(cacheKey, 30, JSON.stringify(results));
+    const payload = {
+      success: true,
+      refreshed_every_seconds: LIVE_RESULTS_TTL,
+      lastFetchedAt: generatedAt,
+      grand_total_votes: grandTotalVotes,
+      category_count: results.length,
+      results,
+    };
 
-    res.json(results);
-  } catch (err) {
-    console.error("❌ Error fetching votes:", err.message);
-    res.status(500).json({ error: "Server error" });
-  }
-};
-const CACHE_TTL = 10; // seconds - cache lifetime
+    await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(payload));
 
-// Helper to round to 2 decimals and return number
-function round2(n) {
-  return Math.round((n + Number.EPSILON) * 100) / 100;
-}
-
-exports.getOverview = async (req, res) => {
-  try {
-    const categoryId = req.params.categoryId || null;
-    const cacheKey = categoryId ? `votes:${categoryId}` : `votes`;
-
-    // try cache
-    const cached = await redisClient.get(cacheKey);
-    if (cached) {
-      return res.json(JSON.parse(cached));
-    }
-
-    // Fetch votes per nominee (optionally filtered by category)
-    const sql = `
-        SELECT
-          c.id AS category_id,
-          c.name AS category_name,
-          n.id AS nominee_id,
-          n.name AS nominee_name,
-          n.location,
-          n.church,
-          IFNULL(SUM(v.vote_count), 0) AS votes
-        FROM nominees n
-        JOIN categories c ON n.category_id = c.id   -- ✅ FIXED
-        LEFT JOIN votes v ON v.candidate_id = n.id
-        ${categoryId ? "WHERE c.id = ?" : ""}
-        GROUP BY n.id, n.name, n.location, n.church, c.id, c.name
-        ORDER BY c.id, votes DESC, n.name ASC
-    `;
-
-    const params = categoryId ? [categoryId] : [];
-    const [rows] = await db.promise().query(sql, params);
-
-    // Group by category and compute totals + percentages + leader flag
-    const votesMap = new Map();
-
-    for (const r of rows) {
-      const catId = r.category_id;
-      if (!votesMap.has(catId)) {
-        votesMap.set(catId, {
-          category_id: catId,
-          category_name: r.category_name,
-          total_votes: 0,
-          nominees: []
-        });
-      }
-      const cat = votesMap.get(catId);
-
-      const nominee = {
-        nominee_id: r.nominee_id,
-        nominee_name: r.nominee_name,
-        location: r.location,
-        church: r.church,
-        votes: Number(r.votes)
-      };
-
-      cat.nominees.push(nominee);
-      cat.total_votes += Number(r.votes);
-    }
-
-    // Determine percentage and leader(s) for each category
-    const results = [];
-    for (const cat of votesMap.values()) {
-      // find max votes to mark leader(s)
-      let maxVotes = 0;
-      for (const n of cat.nominees) {
-        if (n.votes > maxVotes) maxVotes = n.votes;
-      }
-
-      // compute percentage and mark leader(s)
-      for (const n of cat.nominees) {
-        n.percentage = cat.total_votes > 0 ? round2((n.votes / cat.total_votes) * 100) : 0;
-        n.is_leader = n.votes === maxVotes && maxVotes > 0;
-      }
-
-      // lastFetchedAt: when we generated this payload (frontend will display "Updated every Xs")
-      cat.lastFetchedAt = new Date().toISOString();
-
-      // optionally sort nominees by votes desc (already mostly sorted by SQL)
-      cat.nominees.sort((a, b) => b.votes - a.votes || a.nominee_name.localeCompare(b.nominee_name));
-
-      results.push(cat);
-    }
-
-    // If there are votes with no nominees in DB, they won't appear — that's expected.
-    // Cache and return
-    await redisClient.setEx(cacheKey, CACHE_TTL, JSON.stringify(results));
-
-    return res.json(results);
+    return res.json(payload);
   } catch (err) {
     console.error("❌ Error in getOverview:", err);
-    return res.status(500).json({ error: "Server error" });
+    return res.status(500).json({
+      success: false,
+      error: "Server error",
+    });
   }
 };
 
-
-
-// 🟢 Live Results API (with category_id optional filter)
-exports.getLiveResults = async (req, res) => {
+/**
+ * GET /api/votes/overall-leader
+ */
+exports.getOverallLeader = async (req, res) => {
   try {
-    const { category_id } = req.query; // optional filter
+    const cacheKey = "votes:overall_leader";
 
-    // cache key (unique per category if provided)
-    const cacheKey = category_id ? `live_results:${category_id}` : `live_results:all`;
-    const cached = await redisClient.get(cacheKey);
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
-    // build query
-    let sql = `
-      SELECT 
+    const [rows] = await db.promise().query(`
+      SELECT
         c.id AS category_id,
-        c.name AS category_name,   -- ✅ fixed
+        c.name AS category_name,
+
         n.id AS nominee_id,
         n.name AS nominee_name,
         n.location,
         n.church,
-        IFNULL(SUM(v.vote_count), 0) AS total_votes,
-        ROUND(
-          (IFNULL(SUM(v.vote_count), 0) / NULLIF(
-            (SELECT SUM(v2.vote_count) 
-             FROM votes v2 
-             JOIN nominees n2 ON v2.candidate_id = n2.id 
-             WHERE n2.category_id = c.id), 0
-          ) * 100), 2
-        ) AS percentage
-      FROM categories c
-      JOIN nominees n ON n.category_id = c.id
+        n.county,
+
+        IFNULL(SUM(v.vote_count), 0) AS total_votes
+
+      FROM nominees n
+      JOIN categories c ON n.category_id = c.id
       LEFT JOIN votes v ON v.candidate_id = n.id
-    `;
 
-    if (category_id) {
-      sql += ` WHERE c.id = ? `;
-    }
+      GROUP BY
+        c.id,
+        c.name,
+        n.id,
+        n.name,
+        n.location,
+        n.church,
+        n.county
 
-    sql += `
-      GROUP BY c.id, c.name, n.id, n.name, n.location, n.church
-      ORDER BY c.id, total_votes DESC
-    `;
+      ORDER BY total_votes DESC, n.name ASC
+      LIMIT 1
+    `);
 
-    const [rows] = await db.promise().query(sql, category_id ? [category_id] : []);
+    const leader = rows[0] || null;
 
-    // group nominees under votes
-    const results = rows.reduce((acc, row) => {
-      let category = acc.find(c => c.category_id === row.category_id);
-      if (!category) {
-        category = {
-          category_id: row.category_id,
-          category_name: row.category_name,
-          total_votes: 0,
-          nominees: []
-        };
-        acc.push(category);
-      }
-      category.total_votes += row.total_votes;
-      category.nominees.push({
-        nominee_id: row.nominee_id,
-        nominee_name: row.nominee_name,
-        location: row.location,
-        church: row.church,
-        total_votes: row.total_votes,
-        percentage: row.percentage
-      });
-      return acc;
-    }, []);
+    const payload = {
+      success: true,
+      leader,
+      lastFetchedAt: new Date().toISOString(),
+    };
 
-    // save in redis for 10s
-    await redisClient.setEx(cacheKey, 10, JSON.stringify(results));
+    await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(payload));
 
-    res.json(results);
+    return res.json(payload);
   } catch (err) {
-    console.error("❌ Error fetching live results:", err.message);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching overall leader:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Server error",
+    });
   }
 };
 
+/**
+ * GET /api/votes/live-results
+ * GET /api/votes/live-results?category_id=1
+ *
+ * Kept for backward compatibility.
+ */
+exports.getLiveResults = async (req, res) => {
+  try {
+    const categoryId = req.query.category_id || null;
 
-// Get votes grouped by category and nominee (with location & church) by categoryId
+    req.params.categoryId = categoryId;
+
+    return exports.getOverview(req, res);
+  } catch (err) {
+    console.error("❌ Error fetching live results:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Server error",
+    });
+  }
+};
+
+/**
+ * GET /api/votes/summary
+ *
+ * Similar to overview but returns only results array.
+ */
+exports.getVotesSummary = async (req, res) => {
+  try {
+    const cacheKey = "votes:summary";
+
+    const cached = await safeRedisGet(cacheKey);
+    if (cached) {
+      return res.json(JSON.parse(cached));
+    }
+
+    const fakeReq = {
+      params: {},
+    };
+
+    let payload = null;
+
+    const fakeRes = {
+      json(data) {
+        payload = data;
+      },
+      status(code) {
+        return {
+          json(data) {
+            payload = {
+              statusCode: code,
+              ...data,
+            };
+          },
+        };
+      },
+    };
+
+    await exports.getOverview(fakeReq, fakeRes);
+
+    const results = payload && payload.results ? payload.results : [];
+
+    await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(results));
+
+    return res.json(results);
+  } catch (err) {
+    console.error("❌ Error fetching votes summary:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+/**
+ * GET /api/votes/summary/:categoryId
+ */
 exports.getVotesSummaryByCategory = async (req, res) => {
   try {
     const { categoryId } = req.params;
     const cacheKey = `votes:summary:${categoryId}`;
 
-    // 🔑 check cache first
-    const cached = await redisClient.get(cacheKey);
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
-    // ✅ fetch from MySQL filtered by categoryId
-    const [rows] = await db.promise().query(`
-       SELECT 
-         c.id AS category_id,
-         c.name AS category_name,
-         n.id AS nominee_id,
-         n.name AS nominee_name,
-         n.location,
-         n.church,
-         IFNULL(SUM(v.vote_count), 0) AS total_votes,   -- ⭐ SUM instead of COUNT
-         ROUND(
-           (IFNULL(SUM(v.vote_count), 0) / NULLIF(
-              (SELECT SUM(v2.vote_count) 
-               FROM votes v2 
-               JOIN nominees n2 ON v2.candidate_id = n2.id 
-               WHERE n2.category_id = c.id), 0
-            ) * 100), 2
-         ) AS percentage
-       FROM nominees n
-       JOIN votes c ON n.category_id = c.id
-       LEFT JOIN votes v ON v.candidate_id = n.id
-       WHERE c.id = ?
-       GROUP BY c.id, c.name, n.id, n.name, n.location, n.church
-       ORDER BY total_votes DESC
-    `, [categoryId]);
+    const fakeReq = {
+      params: {
+        categoryId,
+      },
+    };
 
-    // cache results for 30s
-    await redisClient.setEx(cacheKey, 30, JSON.stringify(rows));
+    let payload = null;
 
-    res.json(rows);
+    const fakeRes = {
+      json(data) {
+        payload = data;
+      },
+      status(code) {
+        return {
+          json(data) {
+            payload = {
+              statusCode: code,
+              ...data,
+            };
+          },
+        };
+      },
+    };
+
+    await exports.getOverview(fakeReq, fakeRes);
+
+    const results = payload && payload.results ? payload.results : [];
+
+    await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(results));
+
+    return res.json(results);
   } catch (err) {
-    console.error("❌ Error fetching votes:", err.message);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching category votes summary:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-
-
-// Get votes by a specific category ID
+/**
+ * GET /api/votes/category/:categoryId
+ *
+ * Returns one category object.
+ */
 exports.getVotesByCategoryId = async (req, res) => {
   try {
     const { categoryId } = req.params;
-    const cacheKey = `votes:summary:${categoryId}`;
-    const cached = await redisClient.get(cacheKey);
+    const cacheKey = `votes:category:${categoryId}`;
+
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
       return res.json(JSON.parse(cached));
     }
 
-    const [rows] = await db.promise().query(`
-      SELECT 
-        c.id AS category_id,
-        c.name AS category_name,
-        n.id AS nominee_id,
-        n.name AS nominee_name,
-        n.location,
-        n.church,
-        IFNULL(SUM(v.vote_count), 0) AS total_votes,
-        ROUND(
-          (IFNULL(SUM(v.vote_count), 0) / NULLIF(
-            (SELECT SUM(v2.vote_count) 
-             FROM votes v2 
-             JOIN nominees n2 ON v2.candidate_id = n2.id 
-             WHERE n2.category_id = c.id), 0
-          ) * 100), 2
-        ) AS percentage
-      FROM nominees n
-      JOIN votes c ON n.category_id = c.id
-      LEFT JOIN votes v ON v.candidate_id = n.id
-      WHERE c.id = ?
-      GROUP BY c.id, c.name, n.id, n.name, n.location, n.church
-      ORDER BY total_votes DESC
-    `, [categoryId]);
-
-    if (!rows.length) {
-      return res.status(404).json({ message: "Category not found or no votes" });
-    }
-
-    const result = {
-      category_id: rows[0].category_id,
-      category_name: rows[0].category_name,
-      nominees: rows.map(r => ({
-        nominee_id: r.nominee_id,
-        nominee_name: r.nominee_name,
-        location: r.location,
-        church: r.church,
-        total_votes: r.total_votes,
-        percentage: r.percentage
-      }))
+    const fakeReq = {
+      params: {
+        categoryId,
+      },
     };
 
-    await redisClient.setEx(cacheKey, 30, JSON.stringify(result));
-    res.json(result);
+    let payload = null;
+
+    const fakeRes = {
+      json(data) {
+        payload = data;
+      },
+      status(code) {
+        return {
+          json(data) {
+            payload = {
+              statusCode: code,
+              ...data,
+            };
+          },
+        };
+      },
+    };
+
+    await exports.getOverview(fakeReq, fakeRes);
+
+    const result =
+      payload && payload.results && payload.results.length
+        ? payload.results[0]
+        : null;
+
+    if (!result) {
+      return res.status(404).json({
+        message: "Category not found or no nominees",
+      });
+    }
+
+    await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(result));
+
+    return res.json(result);
   } catch (err) {
-    console.error("❌ Error fetching votes by category:", err.message);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching votes by category:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
+/**
+ * GET /api/votes/nominee-results
+ *
+ * Kept for old frontend compatibility.
+ */
+exports.getNomineeResults = async (req, res) => {
+  try {
+    const cacheKey = "nominee_results";
 
+    const cached = await safeRedisGet(cacheKey);
+    if (cached) {
+      return res.json(JSON.parse(cached));
+    }
+
+    const fakeReq = {
+      params: {},
+    };
+
+    let payload = null;
+
+    const fakeRes = {
+      json(data) {
+        payload = data;
+      },
+      status(code) {
+        return {
+          json(data) {
+            payload = {
+              statusCode: code,
+              ...data,
+            };
+          },
+        };
+      },
+    };
+
+    await exports.getOverview(fakeReq, fakeRes);
+
+    const results = payload && payload.results ? payload.results : [];
+
+    await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(results));
+
+    return res.json(results);
+  } catch (err) {
+    console.error("❌ Error fetching nominee results:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+/**
+ * GET /api/votes/results
+ *
+ * Kept for old frontend compatibility.
+ */
 exports.getResults = async (req, res) => {
   try {
     const cacheKey = "election_results";
 
-    // 1️⃣ Try Redis first
-    const cached = await redisClient.get(cacheKey);
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
-      console.log("✅ Results served from Redis cache");
       return res.json(JSON.parse(cached));
     }
 
-    // 2️⃣ Query MySQL
-    const [rows] = await db.query(`
-      SELECT 
-          cat.id AS category_id,
-          cat.name AS category_name,
-          n.id AS nominee_id,
-          n.name AS nominee_name,
-          COUNT(v.id) AS vote_count
-      FROM nominees n
-      LEFT JOIN votes cat ON n.category_id = cat.id
-      LEFT JOIN votes v ON v.nominee_id = n.id
-      GROUP BY cat.id, cat.name, n.id, n.name
-      ORDER BY cat.id, vote_count DESC
-    `);
+    const fakeReq = {
+      params: {},
+    };
 
-    // 3️⃣ Group results by category
-    const results = rows.reduce((acc, row) => {
-      if (!acc[row.category_id]) {
-        acc[row.category_id] = {
-          category_id: row.category_id,
-          category_name: row.category_name,
-          nominees: []
+    let payload = null;
+
+    const fakeRes = {
+      json(data) {
+        payload = data;
+      },
+      status(code) {
+        return {
+          json(data) {
+            payload = {
+              statusCode: code,
+              ...data,
+            };
+          },
         };
-      }
-      acc[row.category_id].nominees.push({
-        nominee_id: row.nominee_id,
-        nominee_name: row.nominee_name,
-        vote_count: row.vote_count
-      });
-      return acc;
-    }, {});
+      },
+    };
 
-    const finalResults = Object.values(results);
+    await exports.getOverview(fakeReq, fakeRes);
 
-    // 4️⃣ Cache in Redis for 60s
-    await redisClient.setEx(cacheKey, 60, JSON.stringify(finalResults));
+    const results = payload && payload.results ? payload.results : [];
 
-    console.log("✅ Results fetched from DB and cached");
-    res.json(finalResults);
+    await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(results));
 
+    return res.json(results);
   } catch (err) {
-    console.error("❌ Error fetching results:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching election results:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
+/**
+ * GET /api/votes/get-votes
+ *
+ * Kept for old compatibility.
+ */
 exports.getVotes = async (req, res) => {
   try {
-    const cacheKey = "votes";
+    const cacheKey = "votes:grouped";
 
-    // 1️⃣ Try Redis cache first
-    const cached = await redisClient.get(cacheKey);
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
-      console.log("✅ Votes served from Redis cache");
       return res.json(JSON.parse(cached));
     }
 
-    // 2️⃣ Query MySQL
-    const [rows] = await db.query(`
-      SELECT 
-          cat.id AS category_id,
-          cat.name AS category_name,
-          n.id AS nominee_id,
-          n.name AS nominee_name,
-          COUNT(v.id) AS vote_count
-      FROM votes cat
-      JOIN nominees n ON n.category_id = cat.id
-      LEFT JOIN votes v ON v.nominee_id = n.id
-      GROUP BY cat.id, cat.name, n.id, n.name
-      ORDER BY cat.id, vote_count DESC
-    `);
+    const fakeReq = {
+      params: {},
+    };
 
-    // 3️⃣ Group results by category
-    const results = rows.reduce((acc, row) => {
-      if (!acc[row.category_id]) {
-        acc[row.category_id] = {
-          category_id: row.category_id,
-          category_name: row.category_name,
-          nominees: []
+    let payload = null;
+
+    const fakeRes = {
+      json(data) {
+        payload = data;
+      },
+      status(code) {
+        return {
+          json(data) {
+            payload = {
+              statusCode: code,
+              ...data,
+            };
+          },
         };
-      }
-      acc[row.category_id].nominees.push({
-        nominee_id: row.nominee_id,
-        nominee_name: row.nominee_name,
-        vote_count: row.vote_count
-      });
-      return acc;
-    }, {});
+      },
+    };
 
-    const finalResults = Object.values(results);
+    await exports.getOverview(fakeReq, fakeRes);
 
-    // 4️⃣ Cache in Redis for 60s
-    await redisClient.setEx(cacheKey, 60, JSON.stringify(finalResults));
+    const results = payload && payload.results ? payload.results : [];
 
-    console.log("✅ Votes fetched from DB and cached");
-    res.json(finalResults);
+    await safeRedisSetEx(cacheKey, LIVE_RESULTS_TTL, JSON.stringify(results));
 
+    return res.json(results);
   } catch (err) {
-    console.error("❌ Error fetching votes:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching grouped votes:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-// Get votes (with Redis cache)
+/**
+ * GET /api/votes/get-all-votes
+ *
+ * Raw vote rows for admin dashboard.
+ */
 exports.getAllvotes = async (req, res) => {
   try {
-    const cacheData = await redisClient.get("votes");
-    if (cacheData) {
-      return res.json(JSON.parse(cacheData));
+    const cacheKey = "votes:raw";
+
+    const cached = await safeRedisGet(cacheKey);
+    if (cached) {
+      return res.json(JSON.parse(cached));
     }
 
-    db.query("SELECT * FROM votes", async (err, results) => {
-      if (err) return res.status(500).json({ error: err.message });
+    const [rows] = await db.promise().query(`
+      SELECT
+        v.*,
+        n.name AS nominee_name,
+        c.name AS category_name
+      FROM votes v
+      LEFT JOIN nominees n ON v.candidate_id = n.id
+      LEFT JOIN categories c ON n.category_id = c.id
+      ORDER BY v.vote_date DESC
+    `);
 
-      await redisClient.setEx("votes", 3600, JSON.stringify(results)); // Cache for 1hr
-      res.json(results);
-    });
+    await safeRedisSetEx(cacheKey, RAW_VOTES_TTL, JSON.stringify(rows));
+
+    return res.json(rows);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("❌ Error fetching all votes:", error);
+    return res.status(500).json({ error: error.message });
   }
 };
 
-
+/**
+ * GET /api/votes/dashboard-total
+ */
 exports.getDashboardTotals = async (req, res) => {
   try {
     const cacheKey = "votes:totals";
-    const cached = await redisClient.get(cacheKey);
 
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
-      console.log("✅ Dashboard Totals served from Redis");
       return res.json(JSON.parse(cached));
     }
 
-    const [[votes]] = await db.promise().query(`SELECT IFNULL(SUM(vote_count),0) AS total_votes FROM votes`);
-    const [[payments]] = await db.promise().query(`SELECT IFNULL(SUM(amount_paid),0) AS total_revenue FROM payments`);
-    const [[nominees]] = await db.promise().query(`SELECT COUNT(id) AS total_nominees FROM nominees`);
-    const [[categories]] = await db.promise().query(`SELECT COUNT(id) AS total_categories FROM categories`);
+    const [[votes]] = await db.promise().query(`
+      SELECT IFNULL(SUM(vote_count), 0) AS total_votes
+      FROM votes
+    `);
+
+    const [[payments]] = await db.promise().query(`
+      SELECT IFNULL(SUM(amount_paid), 0) AS total_revenue
+      FROM payments
+      WHERE payment_status IN ('Paid', 'Success', 'Completed', 'SUCCESS', 'COMPLETED')
+         OR payment_status IS NULL
+    `);
+
+    const [[nominees]] = await db.promise().query(`
+      SELECT COUNT(id) AS total_nominees
+      FROM nominees
+    `);
+
+    const [[categories]] = await db.promise().query(`
+      SELECT COUNT(id) AS total_categories
+      FROM categories
+    `);
 
     const data = {
-      total_votes: votes.total_votes,
-      total_revenue: payments.total_revenue,
-      total_nominees: nominees.total_nominees,
-      total_categories: categories.total_categories
+      total_votes: Number(votes.total_votes || 0),
+      total_revenue: Number(payments.total_revenue || 0),
+      total_nominees: Number(nominees.total_nominees || 0),
+      total_categories: Number(categories.total_categories || 0),
+      lastFetchedAt: new Date().toISOString(),
     };
 
-    await redisClient.setEx(cacheKey, 30, JSON.stringify(data));
-    res.json(data);
+    await safeRedisSetEx(cacheKey, DASHBOARD_TTL, JSON.stringify(data));
+
+    return res.json(data);
   } catch (err) {
-    console.error("❌ Error:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching dashboard totals:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-
+/**
+ * GET /api/votes/payments-summary
+ */
 exports.getPaymentsSummary = async (req, res) => {
   try {
     const cacheKey = "votes:payments_summary";
-    const cached = await redisClient.get(cacheKey);
 
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
-      console.log("✅ Payments Summary served from Redis");
       return res.json(JSON.parse(cached));
     }
 
     const [rows] = await db.promise().query(`
       SELECT 
-        payment_method,
+        IFNULL(payment_method, 'M-Pesa') AS payment_method,
         COUNT(id) AS total_transactions,
-        SUM(amount_paid) AS total_amount
+        IFNULL(SUM(amount_paid), 0) AS total_amount
       FROM payments
-      GROUP BY payment_method
+      GROUP BY IFNULL(payment_method, 'M-Pesa')
+      ORDER BY total_amount DESC
     `);
 
-    await redisClient.setEx(cacheKey, 120, JSON.stringify(rows));
-    res.json(rows);
+    await safeRedisSetEx(cacheKey, CHART_TTL, JSON.stringify(rows));
+
+    return res.json(rows);
   } catch (err) {
-    console.error("❌ Error:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching payments summary:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-// Voting activity grouped per hour
+/**
+ * GET /api/votes/activity-hourly
+ */
 exports.getVotingActivity = async (req, res) => {
   try {
     const cacheKey = "votes:activity:hourly";
-    const cached = await redisClient.get(cacheKey);
+
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -651,28 +765,29 @@ exports.getVotingActivity = async (req, res) => {
     const [rows] = await db.promise().query(`
       SELECT 
         HOUR(v.vote_date) AS vote_hour,
-        SUM(v.vote_count) AS total_votes
+        IFNULL(SUM(v.vote_count), 0) AS total_votes
       FROM votes v
       GROUP BY HOUR(v.vote_date)
       ORDER BY vote_hour ASC
     `);
 
-    // cache for 60s
-    await redisClient.setEx(cacheKey, 60, JSON.stringify(rows));
+    await safeRedisSetEx(cacheKey, CHART_TTL, JSON.stringify(rows));
 
-    res.json(rows);
+    return res.json(rows);
   } catch (err) {
-    console.error("❌ Error fetching voting activity:", err.message);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching voting activity:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-
-// Nominees count grouped per category (for graph)
+/**
+ * GET /api/votes/nominees-per-category
+ */
 exports.getNomineesPerCategory = async (req, res) => {
   try {
     const cacheKey = "nominees:per-category";
-    const cached = await redisClient.get(cacheKey);
+
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
       return res.json(JSON.parse(cached));
     }
@@ -688,24 +803,24 @@ exports.getNomineesPerCategory = async (req, res) => {
       ORDER BY nominee_count DESC, c.name ASC
     `);
 
-    // cache for 60 seconds
-    await redisClient.setEx(cacheKey, 60, JSON.stringify(rows));
+    await safeRedisSetEx(cacheKey, CHART_TTL, JSON.stringify(rows));
 
-    res.json(rows);
+    return res.json(rows);
   } catch (err) {
-    console.error("❌ Error fetching nominees per category:", err.message);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching nominees per category:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
-
+/**
+ * GET /api/votes/top-nominees
+ */
 exports.getTopNominees = async (req, res) => {
   try {
     const cacheKey = "votes:top_nominees";
-    const cached = await redisClient.get(cacheKey);
 
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
-      console.log("✅ Top Nominees served from Redis");
       return res.json(JSON.parse(cached));
     }
 
@@ -715,29 +830,43 @@ exports.getTopNominees = async (req, res) => {
         c.name AS category_name,
         n.id AS nominee_id,
         n.name AS nominee_name,
+        n.location,
+        n.church,
+        n.county,
         IFNULL(SUM(v.vote_count), 0) AS total_votes
       FROM nominees n
       JOIN categories c ON n.category_id = c.id
       LEFT JOIN votes v ON v.candidate_id = n.id
-      GROUP BY c.id, c.name, n.id, n.name
-      ORDER BY c.id, total_votes DESC
+      GROUP BY
+        c.id,
+        c.name,
+        n.id,
+        n.name,
+        n.location,
+        n.church,
+        n.county
+      ORDER BY total_votes DESC, n.name ASC
+      LIMIT 20
     `);
 
-    await redisClient.setEx(cacheKey, 60, JSON.stringify(rows));
-    res.json(rows);
+    await safeRedisSetEx(cacheKey, CHART_TTL, JSON.stringify(rows));
+
+    return res.json(rows);
   } catch (err) {
-    console.error("❌ Error:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching top nominees:", err);
+    return res.status(500).json({ error: "Server error" });
   }
 };
 
+/**
+ * GET /api/votes/votes-per-category
+ */
 exports.getVotesPerCategory = async (req, res) => {
   try {
     const cacheKey = "votes:votes_per_category";
-    const cached = await redisClient.get(cacheKey);
 
+    const cached = await safeRedisGet(cacheKey);
     if (cached) {
-      console.log("✅ Votes per Category served from Redis");
       return res.json(JSON.parse(cached));
     }
 
@@ -750,13 +879,37 @@ exports.getVotesPerCategory = async (req, res) => {
       LEFT JOIN nominees n ON n.category_id = c.id
       LEFT JOIN votes v ON v.candidate_id = n.id
       GROUP BY c.id, c.name
-      ORDER BY total_votes DESC
+      ORDER BY total_votes DESC, c.name ASC
     `);
 
-    await redisClient.setEx(cacheKey, 60, JSON.stringify(rows));
-    res.json(rows);
+    await safeRedisSetEx(cacheKey, CHART_TTL, JSON.stringify(rows));
+
+    return res.json(rows);
   } catch (err) {
-    console.error("❌ Error:", err);
-    res.status(500).json({ error: "Server error" });
+    console.error("❌ Error fetching votes per category:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+};
+
+/**
+ * POST /api/votes/clear-cache
+ * Optional admin endpoint.
+ */
+exports.clearVoteCacheEndpoint = async (req, res) => {
+  try {
+    const { category_id } = req.body || {};
+
+    await clearVoteCaches(category_id || null);
+
+    return res.json({
+      success: true,
+      message: "Vote caches cleared successfully",
+    });
+  } catch (err) {
+    console.error("❌ Error clearing vote cache:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Server error",
+    });
   }
 };
